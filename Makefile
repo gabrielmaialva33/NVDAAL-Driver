@@ -9,59 +9,55 @@ KEXT_PATH = $(BUILD_DIR)/$(KEXT_NAME).kext
 INFO_PLIST = Info.plist
 
 # Arquivos fonte
-SOURCES = Sources/NVDAAL.cpp
-# SOURCES += Sources/NVDAALGsp.cpp  # TODO: Integrar quando pronto
+SOURCES = Sources/NVDAAL.cpp Sources/NVDAALGsp.cpp Sources/NVDAALUserClient.cpp Sources/NVDAALMemory.cpp Sources/NVDAALQueue.cpp Sources/NVDAALDisplay.cpp
 
-# SDK e ferramentas
-SDKROOT = $(shell xcrun --show-sdk-path)
-CXX = clang++
-
-# Flags de compilação para kernel extension
-CXXFLAGS = -arch x86_64 \
-           -mmacosx-version-min=13.0 \
-           -mkernel \
-           -nostdinc \
-           -fno-builtin \
-           -fno-common \
-           -fno-exceptions \
-           -fno-rtti \
-           -fno-stack-protector \
-           -fstrict-aliasing \
-           -O2 \
-           -g \
-           -DKERNEL \
-           -DKERNEL_PRIVATE \
-           -DDRIVER_PRIVATE \
-           -DAPPLE \
-           -DNeXT \
-           -DNVDAAL_COMPUTE_ONLY=1
-
-# Includes
-INCLUDES = -I$(SDKROOT)/System/Library/Frameworks/Kernel.framework/Headers \
-           -I$(SDKROOT)/System/Library/Frameworks/IOKit.framework/Headers \
-           -ISources
-
-# Flags de link
-LDFLAGS = -arch x86_64 \
-          -static \
-          -nostdlib \
-          -Wl,-kext \
-          -Wl,-exported_symbols_list,/dev/null \
-          -lkmod
+# ...
 
 # Objetos
-OBJECTS = $(BUILD_DIR)/NVDAAL.o
+OBJECTS = $(BUILD_DIR)/NVDAAL.o $(BUILD_DIR)/NVDAALGsp.o $(BUILD_DIR)/NVDAALUserClient.o $(BUILD_DIR)/NVDAALMemory.o $(BUILD_DIR)/NVDAALQueue.o $(BUILD_DIR)/NVDAALDisplay.o
 
 # =============================================================================
 # Targets
 # =============================================================================
 
-all: $(KEXT_PATH)
-	@echo "[+] Build completo: $(KEXT_PATH)"
+all: $(KEXT_PATH) tools lib
+	@echo "[+] Build completo: $(KEXT_PATH), Tools & Library"
+
+lib: $(BUILD_DIR)/libNVDAAL.dylib
+
+$(BUILD_DIR)/libNVDAAL.dylib: Library/libNVDAAL.cpp Library/nvdaal_c_api.cpp Library/libNVDAAL.h
+	@mkdir -p $(BUILD_DIR)
+	clang++ -dynamiclib -std=c++17 -framework IOKit -framework CoreFoundation -I./Library \
+		Library/libNVDAAL.cpp Library/nvdaal_c_api.cpp -o $@
+	@echo "[*] Shared Library: $@"
+
+tools:
+	@echo "[*] Building tools..."
+	$(MAKE) -C Tools/nvdaal-cli
 
 $(KEXT_PATH): $(BUILD_DIR) $(KEXT_PATH)/Contents/MacOS/$(KEXT_NAME) $(KEXT_PATH)/Contents/Info.plist
 
-$(BUILD_DIR)/NVDAAL.o: Sources/NVDAAL.cpp Sources/NVDAALRegs.h
+$(BUILD_DIR)/NVDAAL.o: Sources/NVDAAL.cpp Sources/NVDAALRegs.h Sources/NVDAALGsp.h
+	@mkdir -p $(BUILD_DIR)
+	clang++ $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+
+$(BUILD_DIR)/NVDAALGsp.o: Sources/NVDAALGsp.cpp Sources/NVDAALGsp.h Sources/NVDAALRegs.h
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+
+$(BUILD_DIR)/NVDAALUserClient.o: Sources/NVDAALUserClient.cpp Sources/NVDAALUserClient.h Sources/NVDAAL.h
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+
+$(BUILD_DIR)/NVDAALMemory.o: Sources/NVDAALMemory.cpp Sources/NVDAALMemory.h
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+
+$(BUILD_DIR)/NVDAALQueue.o: Sources/NVDAALQueue.cpp Sources/NVDAALQueue.h Sources/NVDAALRegs.h
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+
+$(BUILD_DIR)/NVDAALDisplay.o: Sources/NVDAALDisplay.cpp Sources/NVDAALDisplay.h
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
 
@@ -149,7 +145,7 @@ status:
 	@kextstat | grep -i nvdaal || echo "Kext não carregado"
 	@echo ""
 	@echo "[*] Dispositivos PCI NVIDIA:"
-	@ioreg -l | grep -i "class IOPCIDevice" -A 20 | grep -i nvidia || echo "Nenhum encontrado"
+	@ioreg -l | grep -i \"class IOPCIDevice\" -A 20 | grep -i nvidia || echo "Nenhum encontrado"
 
 # =============================================================================
 # Firmware
