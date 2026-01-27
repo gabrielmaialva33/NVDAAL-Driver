@@ -1,0 +1,38 @@
+# Build artifacts
+Build/
+*.o
+*.kext
+*.dSYM/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.vscode/
+.idea/
+*.xcodeproj/
+xcuserdata/
+*.xcworkspace/
+
+# Firmware (user must provide their own)
+Firmware/*.bin
+Firmware/*.rom
+!Firmware/README.md
+
+# Logs
+*.log
+
+# Temporary files
+*.swp
+*.swo
+*~
+\#*\#
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+venv/

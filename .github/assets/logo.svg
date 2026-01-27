@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="gpuGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#76B900"/>
+      <stop offset="100%" style="stop-color:#4A7A00"/>
+    </linearGradient>
+    <linearGradient id="chipGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#2D2D2D"/>
+      <stop offset="100%" style="stop-color:#1A1A1A"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background Circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#gpuGradient)" opacity="0.1"/>
+  <circle cx="100" cy="100" r="95" fill="none" stroke="url(#gpuGradient)" stroke-width="3"/>
+
+  <!-- GPU Chip Body -->
+  <rect x="45" y="55" width="110" height="90" rx="8" fill="url(#chipGradient)"/>
+
+  <!-- GPU Die -->
+  <rect x="60" y="70" width="80" height="60" rx="4" fill="#76B900"/>
+
+  <!-- Compute Cores Grid -->
+  <g fill="#2D2D2D" opacity="0.8">
+    <!-- Row 1 -->
+    <rect x="68" y="78" width="12" height="12" rx="2"/>
+    <rect x="84" y="78" width="12" height="12" rx="2"/>
+    <rect x="100" y="78" width="12" height="12" rx="2"/>
+    <rect x="116" y="78" width="12" height="12" rx="2"/>
+    <!-- Row 2 -->
+    <rect x="68" y="94" width="12" height="12" rx="2"/>
+    <rect x="84" y="94" width="12" height="12" rx="2"/>
+    <rect x="100" y="94" width="12" height="12" rx="2"/>
+    <rect x="116" y="94" width="12" height="12" rx="2"/>
+    <!-- Row 3 -->
+    <rect x="68" y="110" width="12" height="12" rx="2"/>
+    <rect x="84" y="110" width="12" height="12" rx="2"/>
+    <rect x="100" y="110" width="12" height="12" rx="2"/>
+    <rect x="116" y="110" width="12" height="12" rx="2"/>
+  </g>
+
+  <!-- Pins/Contacts -->
+  <g fill="#C0C0C0">
+    <!-- Top pins -->
+    <rect x="55" y="48" width="6" height="10" rx="1"/>
+    <rect x="70" y="48" width="6" height="10" rx="1"/>
+    <rect x="85" y="48" width="6" height="10" rx="1"/>
+    <rect x="100" y="48" width="6" height="10" rx="1"/>
+    <rect x="115" y="48" width="6" height="10" rx="1"/>
+    <rect x="130" y="48" width="6" height="10" rx="1"/>
+    <rect x="145" y="48" width="6" height="10" rx="1"/>
+    <!-- Bottom pins -->
+    <rect x="55" y="142" width="6" height="10" rx="1"/>
+    <rect x="70" y="142" width="6" height="10" rx="1"/>
+    <rect x="85" y="142" width="6" height="10" rx="1"/>
+    <rect x="100" y="142" width="6" height="10" rx="1"/>
+    <rect x="115" y="142" width="6" height="10" rx="1"/>
+    <rect x="130" y="142" width="6" height="10" rx="1"/>
+    <rect x="145" y="142" width="6" height="10" rx="1"/>
+    <!-- Left pins -->
+    <rect x="38" y="65" width="10" height="6" rx="1"/>
+    <rect x="38" y="80" width="10" height="6" rx="1"/>
+    <rect x="38" y="95" width="10" height="6" rx="1"/>
+    <rect x="38" y="110" width="10" height="6" rx="1"/>
+    <rect x="38" y="125" width="10" height="6" rx="1"/>
+    <!-- Right pins -->
+    <rect x="152" y="65" width="10" height="6" rx="1"/>
+    <rect x="152" y="80" width="10" height="6" rx="1"/>
+    <rect x="152" y="95" width="10" height="6" rx="1"/>
+    <rect x="152" y="110" width="10" height="6" rx="1"/>
+    <rect x="152" y="125" width="10" height="6" rx="1"/>
+  </g>
+
+  <!-- NVDAAL Text -->
+  <text x="100" y="175" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#76B900" text-anchor="middle">NVDAAL</text>
+</svg>
