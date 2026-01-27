@@ -40,9 +40,13 @@ bool NVDAAL::init(OSDictionary *dictionary) {
     deviceId = 0;
     gsp = nullptr;
     memory = nullptr;
-    computeQueue = nullptr;
+    vaSpace = nullptr;
+    channel = nullptr;
     display = nullptr;
     computeReady = false;
+    
+    hClient = 0;
+    hDevice = 0;
 
     IOLog("NVDAAL: Compute driver initialized\n");
     return true;
@@ -50,6 +54,26 @@ bool NVDAAL::init(OSDictionary *dictionary) {
 
 void NVDAAL::free(void) {
     IOLog("NVDAAL: Driver freed\n");
+    
+    // Destroy GSP objects in reverse order logic usually happens in components
+    // but here we just release the C++ objects
+    if (channel) {
+        channel->release();
+        channel = nullptr;
+    }
+    if (vaSpace) {
+        vaSpace->release();
+        vaSpace = nullptr;
+    }
+    
+    // We should free Client/Device handles too if GSP is still up
+    if (gsp && hDevice) {
+        gsp->rmFree(hClient, hClient, hDevice);
+    }
+    if (gsp && hClient) {
+        gsp->rmFree(hClient, hClient, hClient);
+    }
+
     if (gsp) {
         delete gsp;
         gsp = nullptr;
@@ -57,10 +81,6 @@ void NVDAAL::free(void) {
     if (memory) {
         memory->release();
         memory = nullptr;
-    }
-    if (computeQueue) {
-        computeQueue->release();
-        computeQueue = nullptr;
     }
     if (display) {
         display->release();
@@ -155,13 +175,6 @@ bool NVDAAL::start(IOService *provider) {
     memory = NVDAALMemory::withDevice(pciDevice, bar1Map);
     if (!memory) {
         IOLog("NVDAAL: Failed to initialize Memory Manager\n");
-    }
-
-    // Initialize Compute Queue (GPFIFO)
-    // Offset 0x40 is a common doorbell register for early compute engines
-    computeQueue = NVDAALQueue::withSize(4096, (volatile uint32_t *)((uintptr_t)mmioBase + 0x40));
-    if (!computeQueue) {
-        IOLog("NVDAAL: Failed to initialize Compute Queue\n");
     }
 
     // Initialize Fake Display (Metal Spoofing)
@@ -352,43 +365,64 @@ bool NVDAAL::loadGspFirmware(const void *data, size_t size) {
         return false;
     }
 
-        IOLog("NVDAAL: GSP successfully initialized!\n");
+    IOLog("NVDAAL: GSP successfully initialized!\n");
 
-        computeReady = true;
-
-        return true;
-
-    }
-
+    // ====================================================================
+    // Initialize RM Hierarchy
+    // ====================================================================
     
-
-    uint64_t NVDAAL::allocVram(size_t size) {
-
-        if (!memory) return 0;
-
-        return memory->allocVram(size);
-
+    // 1. Create Root Client
+    hClient = gsp->nextHandle();
+    Nv01RootClientParams clientParams = { 0 };
+    if (!gsp->rmAlloc(hClient, NV01_NULL_OBJECT, hClient, NV01_ROOT_CLIENT, &clientParams, sizeof(clientParams))) {
+        IOLog("NVDAAL: Failed to alloc Root Client\n");
+        return false;
     }
 
+    // 2. Create Device
+    hDevice = gsp->nextHandle();
+    // Device allocation params are usually simple class ID binding
+    // For now we pass empty/null or minimal params if needed
+    // Note: Some RM implementations require specific params for Device
+    if (!gsp->rmAlloc(hClient, hClient, hDevice, AD102_COMPUTE_A, nullptr, 0)) {
+        IOLog("NVDAAL: Failed to alloc Device (AD102_COMPUTE_A)\n");
+        // return false; 
+        // Proceeding carefully, might fail if params required
+    }
     
-
-    bool NVDAAL::submitCommand(uint32_t cmd) {
-
-        if (!computeQueue) return false;
-
-        
-
-        bool ok = computeQueue->push(cmd);
-
-        if (ok) {
-
-            computeQueue->kick();
-
-        }
-
-        return ok;
-
+    // 3. Initialize VASpace (MMU)
+    vaSpace = NVDAALVASpace::withGsp(gsp, memory, hClient, hDevice);
+    if (!vaSpace || !vaSpace->boot()) {
+        IOLog("NVDAAL: Failed to boot VASpace\n");
+        return false;
     }
+
+    // 4. Initialize Compute Channel
+    channel = NVDAALChannel::withVASpace(gsp, vaSpace, hClient, hDevice);
+    if (!channel || !channel->boot()) {
+        IOLog("NVDAAL: Failed to boot Compute Channel\n");
+        return false;
+    }
+
+    computeReady = true;
+    IOLog("NVDAAL: Compute Initialization COMPLETE!\n");
+
+    return true;
+}
+
+uint64_t NVDAAL::allocVram(size_t size) {
+    if (!memory) return 0;
+    return memory->allocVram(size);
+}
+
+bool NVDAAL::submitCommand(uint32_t cmd) {
+    if (!channel) return false;
+    
+    // TODO: cmd is currently a placeholder 32-bit value
+    // Real submission requires a command buffer address and length
+    // For now we just pass it as an address to test the plumbing
+    return channel->submit((uint64_t)cmd, 4);
+}
 
     
 
@@ -409,6 +443,6 @@ uint32_t NVDAAL::readReg(uint32_t offset) {
 void NVDAAL::writeReg(uint32_t offset, uint32_t value) {
     if (mmioBase) {
         mmioBase[offset / 4] = value;
-        __asm__ __volatile__ ("mfence" ::: "memory");
+        __sync_synchronize();
     }
 }

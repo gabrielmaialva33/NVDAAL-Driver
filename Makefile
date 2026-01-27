@@ -9,12 +9,21 @@ KEXT_PATH = $(BUILD_DIR)/$(KEXT_NAME).kext
 INFO_PLIST = Info.plist
 
 # Arquivos fonte
-SOURCES = Sources/NVDAAL.cpp Sources/NVDAALGsp.cpp Sources/NVDAALUserClient.cpp Sources/NVDAALMemory.cpp Sources/NVDAALQueue.cpp Sources/NVDAALDisplay.cpp
-
-# ...
+SOURCES = Sources/NVDAAL.cpp Sources/NVDAALGsp.cpp Sources/NVDAALUserClient.cpp Sources/NVDAALMemory.cpp Sources/NVDAALVASpace.cpp Sources/NVDAALChannel.cpp Sources/NVDAALDisplay.cpp
 
 # Objetos
-OBJECTS = $(BUILD_DIR)/NVDAAL.o $(BUILD_DIR)/NVDAALGsp.o $(BUILD_DIR)/NVDAALUserClient.o $(BUILD_DIR)/NVDAALMemory.o $(BUILD_DIR)/NVDAALQueue.o $(BUILD_DIR)/NVDAALDisplay.o
+OBJECTS = $(BUILD_DIR)/NVDAAL.o $(BUILD_DIR)/NVDAALGsp.o $(BUILD_DIR)/NVDAALUserClient.o $(BUILD_DIR)/NVDAALMemory.o $(BUILD_DIR)/NVDAALVASpace.o $(BUILD_DIR)/NVDAALChannel.o $(BUILD_DIR)/NVDAALDisplay.o
+
+# Compilador e Flags
+SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path)
+CXX = xcrun -sdk macosx clang++
+CXXFLAGS = -x c++ -std=c++17 -arch arm64 -fno-builtin -fno-exceptions -fno-rtti -mkernel \
+	-DKERNEL -DKERNEL_PRIVATE -DDRIVER_PRIVATE -DAPPLE -DNeXT \
+	-I$(SDKROOT)/System/Library/Frameworks/Kernel.framework/Headers \
+	-I$(SDKROOT)/System/Library/Frameworks/IOKit.framework/Headers \
+	-I./Sources
+
+LDFLAGS = -Xlinker -kext -nostdlib -lkmod -r -arch arm64
 
 # =============================================================================
 # Targets
@@ -39,32 +48,38 @@ $(KEXT_PATH): $(BUILD_DIR) $(KEXT_PATH)/Contents/MacOS/$(KEXT_NAME) $(KEXT_PATH)
 
 $(BUILD_DIR)/NVDAAL.o: Sources/NVDAAL.cpp Sources/NVDAALRegs.h Sources/NVDAALGsp.h
 	@mkdir -p $(BUILD_DIR)
-	clang++ $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/NVDAALGsp.o: Sources/NVDAALGsp.cpp Sources/NVDAALGsp.h Sources/NVDAALRegs.h
 	@mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/NVDAALUserClient.o: Sources/NVDAALUserClient.cpp Sources/NVDAALUserClient.h Sources/NVDAAL.h
 	@mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/NVDAALMemory.o: Sources/NVDAALMemory.cpp Sources/NVDAALMemory.h
 	@mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/NVDAALQueue.o: Sources/NVDAALQueue.cpp Sources/NVDAALQueue.h Sources/NVDAALRegs.h
+$(BUILD_DIR)/NVDAALVASpace.o: Sources/NVDAALVASpace.cpp Sources/NVDAALVASpace.h Sources/NVDAALRegs.h
 	@mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/NVDAALChannel.o: Sources/NVDAALChannel.cpp Sources/NVDAALChannel.h Sources/NVDAALRegs.h
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/NVDAALDisplay.o: Sources/NVDAALDisplay.cpp Sources/NVDAALDisplay.h
 	@mkdir -p $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 $(KEXT_PATH)/Contents/MacOS/$(KEXT_NAME): $(OBJECTS)
 	@mkdir -p $(dir $@)
 	$(CXX) $(LDFLAGS) -o $@ $(OBJECTS)
 	@echo "[*] Binary: $@"
+	@echo "[*] Signing kext (ad-hoc)..."
+	@codesign -s - --force --deep $(KEXT_PATH)/Contents/MacOS/$(KEXT_NAME)
 
 $(KEXT_PATH)/Contents/Info.plist: $(INFO_PLIST)
 	@mkdir -p $(dir $@)

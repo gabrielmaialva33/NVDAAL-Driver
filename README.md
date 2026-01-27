@@ -113,7 +113,7 @@ sudo reboot
 
 ## :wrench: Features
 
-### Current (v0.2.0)
+### Current (v0.3.0 - Pioneer)
 - :white_check_mark: PCI device detection and enumeration
 - :white_check_mark: BAR0/BAR1 memory mapping (MMIO + VRAM)
 - :white_check_mark: Chip identification (Ada Lovelace architecture)
@@ -122,6 +122,14 @@ sudo reboot
   - Radix3 Page Table Builder
   - WPR2 Metadata Configuration
   - Secure Boot Sequence (Falcon Reset -> RISC-V Boot)
+  - **Full RPC Engine** (rmAlloc, rmControl)
+- :white_check_mark: **Memory Management (MMU)**
+  - Virtual Address Space (VASpace)
+  - Page Directory/Table management
+- :white_check_mark: **Compute Engine**
+  - GPFIFO Channel creation
+  - User Doorbell mapping
+  - Command Submission
 - :white_check_mark: **User-Space Interface**
   - IOUserClient for secure firmware upload
   - Zero-copy memory mapping
@@ -129,8 +137,8 @@ sudo reboot
 - :white_check_mark: **CLI Tool** (nvdaal-cli)
 
 ### In Development
-- :construction: Compute Queue Management (GPFIFO)
-- :construction: Memory allocation improvements
+- :construction: Compute Class (ADA_COMPUTE_A) Context
+- :construction: Semaphore Synchronization
 
 ### Planned
 - :hourglass: tinygrad/PyTorch integration

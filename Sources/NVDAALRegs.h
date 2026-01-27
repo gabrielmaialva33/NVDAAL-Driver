@@ -303,4 +303,128 @@ typedef struct {
 #define FERMI_VASPACE_A               0x000090F1
 #define GF100_CHANNEL_GPFIFO          0x0000906F
 
+// ============================================================================
+// GSP / RM Classes & Structures
+// ============================================================================
+
+//
+// NVIDIA Class IDs (Architecture Specific)
+//
+#define NV01_ROOT                       0x00000000
+// #define NV01_ROOT_CLIENT                0x00000000 // Host Client (Already defined below or handle appropriately)
+// NV01_ROOT_CLIENT is defined as 0x00000041 in older headers, but 0x00 for RM handle usage in some contexts.
+// We will use the specific value for RM alloc:
+#undef NV01_ROOT_CLIENT
+#define NV01_ROOT_CLIENT                0x00000000 
+#define NV01_EVENT_OS_EVENT             0x00000079
+
+#define AD102_COMPUTE_A                 0x0000C9C0 // Ada Compute
+
+#define FERMI_TWOD_A                    0x0000902D
+#define FERMI_VASPACE_A                 0x000090F1
+#define FERMI_CONTEXT_SHARE_A           0x00009067
+
+#define GF100_SUBDEVICE_FULL            0x00002080
+
+#define NV_MEMORY_FABRIC                0x000000F8 // Memory Fabric
+#define NV01_MEMORY_SYSTEM              0x0000003E // System Memory (GTT)
+#define NV01_MEMORY_LOCAL_USER          0x00000040 // VRAM
+
+#define AMPERE_CHANNEL_GPFIFO_A         0x0000C56F // GPFIFO (Ampere+)
+#define ADA_CHANNEL_GPFIFO_A            0x0000C96F // GPFIFO (Ada)
+
+#define NV_CONF_COMPUTE_CAPABILITY      0x0000C7C0
+
+//
+// RPC Message IDs (VGPU)
+//
+#define NV_VGPU_MSG_FUNCTION_GSP_RM_ALLOC      0x24
+#define NV_VGPU_MSG_FUNCTION_GSP_RM_CONTROL    0x25
+#define NV_VGPU_MSG_FUNCTION_GSP_RM_FREE       0x26
+
+//
+// RM Handles (Arbitrary software handles used by driver to ID objects)
+//
+#define NV01_NULL_OBJECT                0x00000000
+#define NV01_ROOT_HANDLE                0x00000000
+
+//
+// RM Allocation Parameters (Generic Header)
+//
+struct NvGspAllocParams {
+    uint32_t hClient;    // Handle of the Client
+    uint32_t hParent;    // Handle of the Parent Object
+    uint32_t hObject;    // Handle of the New Object (to be created)
+    uint32_t hClass;     // Class ID of the New Object
+    uint32_t status;     // Out: Status
+};
+
+//
+// Specific Allocation Structures
+//
+
+// NV01_ROOT_CLIENT
+struct Nv01RootClientParams {
+    uint32_t reserved;
+};
+
+// FERMI_VASPACE_A
+struct NvFermiVASpaceParams {
+    uint32_t index;       // usually 0
+    uint32_t flags;       // allocation flags
+    uint64_t vaSize;      // Virtual Address space size
+    uint64_t vaStart;     // Start address
+    uint64_t vaBase;      // Base address
+    uint64_t vaLimit;     // Limit address
+    uint32_t bigPageSize; // e.g. 64KB
+    uint32_t reserved;
+};
+
+// NV01_MEMORY_SYSTEM / LOCAL_USER
+struct NvMemoryAllocParams {
+    uint32_t type;        // Page type/kind
+    uint32_t flags;       // Allocation flags
+    uint32_t attr;        // Caching attributes
+    uint32_t format;      // Pixel format (if applicable)
+    uint32_t width;
+    uint32_t height;
+    uint32_t pitch;
+    uint64_t size;
+    uint64_t alignment;
+    uint64_t offset;      // Out: physical/virtual offset
+    uint64_t limit;
+    uint64_t address;     // Fixed address request
+};
+
+//
+// RM Control (IOCTL) Structure
+//
+struct NvGspControlParams {
+    uint32_t hClient;
+    uint32_t hObject;
+    uint32_t cmd;        // Control Command ID
+    uint32_t flags;
+    uint32_t status;     // Out: Status
+    uint32_t paramsSize; // Size of inline parameters
+    // followed by params...
+};
+
+//
+// Channel Allocation Parameters (ADA_CHANNEL_GPFIFO_A)
+//
+struct NvChannelAllocParams {
+    uint32_t ampMode;      // Ampere+ Mode
+    uint32_t engineType;   // NV2080_ENGINE_TYPE_*
+    uint32_t gpFifoOffset; // Offset of GPFIFO in user memory
+    uint32_t gpFifoEntries;// Number of entries
+    uint32_t flags;
+    uint32_t hUserdMemory; // Handle to UserD memory
+    uint64_t userdOffset;  // Offset within UserD memory
+};
+
+// Engine Types
+#define NV2080_ENGINE_TYPE_GRAPHICS 0
+#define NV2080_ENGINE_TYPE_COMPUTE  1
+#define NV2080_ENGINE_TYPE_COPY     2
+
 #endif // NVDAAL_REGS_H

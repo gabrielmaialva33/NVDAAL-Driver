@@ -40,95 +40,81 @@ graph TD
 Main component. Manages lifecycle.
 
 ```cpp
-class NVDAALDevice : public IOService {
+class NVDAAL : public IOService {
     // PCI and MMIO
     IOPCIDevice *pciDevice;
     IOMemoryMap *bar0Map;      // MMIO registers
     IOMemoryMap *bar1Map;      // VRAM aperture
 
+    // GSP RM Handles
+    uint32_t hClient;
+    uint32_t hDevice;
+
     // Sub-components
-    NVDAALGsp *gsp;            // GSP controller
+    NVDAALGsp *gsp;            // GSP controller & RPC
     NVDAALMemory *memory;      // Memory manager
-    NVDAALQueue *computeQueue; // Compute submission
+    NVDAALVASpace *vaSpace;    // Virtual Memory (MMU)
+    NVDAALChannel *channel;    // Compute Queue (GPFIFO)
 };
 ```
 
-### Initialization Sequence (GSP)
+### Initialization Sequence (Compute)
 
 ```mermaid
 sequenceDiagram
     participant User as nvdaal-cli
-    participant UC as IOUserClient
     participant Drv as NVDAAL
     participant GSP as NVDAALGsp
-    participant HW as GPU (Falcon)
+    participant RM as Resource Manager
 
-    User->>UC: Open Connection
-    User->>UC: LoadFirmware(ptr, size)
-    UC->>Drv: loadGspFirmware()
-    Drv->>GSP: parseElfFirmware()
-    GSP->>GSP: Build Radix3 Table
-    GSP->>GSP: Setup WPR2 Meta
+    User->>DrV: loadFirmware()
     Drv->>GSP: boot()
-    GSP->>HW: Reset Falcon
-    GSP->>HW: Load Bootloader
-    GSP->>HW: Start RISC-V
-    GSP->>HW: Wait GSP_INIT_DONE
-    HW-->>GSP: INIT_DONE Signal
-    GSP-->>Drv: Success
-    Drv-->>UC: Success
-    UC-->>User: Success
+    GSP->>GSP: init_firmware
+    GSP-->>Drv: GSP_INIT_DONE
+    
+    Note over Drv, RM: RPC Object Creation
+    
+    Drv->>GSP: rmAlloc(Client)
+    GSP->>RM: NV01_ROOT_CLIENT
+    
+    Drv->>GSP: rmAlloc(Device)
+    GSP->>RM: AD102_COMPUTE_A
+    
+    Drv->>GSP: rmAlloc(VASpace)
+    GSP->>RM: FERMI_VASPACE_A
+    
+    Drv->>GSP: rmAlloc(Channel)
+    GSP->>RM: ADA_CHANNEL_GPFIFO_A
+    
+    Drv-->>User: Success (Compute Ready)
 ```
 
 ### NVDAALGsp
 Manages communication with the GSP (GPU System Processor).
+Implements `rmAlloc`, `rmControl`, `rmFree` for object management.
 
 ```cpp
 class NVDAALGsp {
-    // Firmware
-    IOBufferMemoryDescriptor *gspFirmware;
-    IOBufferMemoryDescriptor *bootloader;
+    // ... firmware management ...
 
-    // Message queues (DMA)
-    IOBufferMemoryDescriptor *cmdQueue;
-    IOBufferMemoryDescriptor *statQueue;
-
-    // RPC
-    bool sendRpc(uint32_t function, void *params, size_t size);
-    bool waitEvent(uint32_t event, uint32_t timeout);
+    // Resource Manager
+    bool rmAlloc(uint32_t hClient, uint32_t hParent, uint32_t hObject, 
+                 uint32_t hClass, void *params, size_t paramsSize);
 };
 ```
 
-### NVDAALMemory
-Manages GPU memory allocation.
+### NVDAALVASpace (MMU)
+Manages Virtual Address Space using `FERMI_VASPACE_A`.
+- Allocates Page Directory (PDE) in VRAM.
+- Registers VASpace with GSP.
+- Maps BAR1 and System Memory into GPU VA.
 
-```cpp
-class NVDAALMemory {
-    // VRAM management
-    uint64_t vramBase;
-    uint64_t vramSize;         // 24GB for 4090
+### NVDAALChannel (GPFIFO)
+Manages Compute Queue using `ADA_CHANNEL_GPFIFO_A`.
+- Allocates Ring Buffer (GPFIFO) in System Memory.
+- Allocates User Doorbell (UserD).
+- Submits work via `submit(gpuAddr, len)`.
 
-    // Allocations
-    IOBufferMemoryDescriptor *allocVram(size_t size);
-    IOBufferMemoryDescriptor *allocSystemDma(size_t size);
-};
-```
-
-### NVDAALQueue
-Submits compute commands to the GPU.
-
-```cpp
-class NVDAALQueue {
-    // Ring buffer
-    IOBufferMemoryDescriptor *ringBuffer;
-    uint32_t head, tail;
-
-    // Submission
-    void pushCommand(void *cmd, size_t size);
-    void kick();  // Signal GPU
-    void waitIdle();
-};
-```
 
 ## Important Registers (Compute)
 

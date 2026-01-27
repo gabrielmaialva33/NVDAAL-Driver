@@ -9,7 +9,8 @@
 #include <IOKit/pci/IOPCIDevice.h>
 #include "NVDAALGsp.h"
 #include "NVDAALMemory.h"
-#include "NVDAALQueue.h"
+#include "NVDAALChannel.h"
+#include "NVDAALVASpace.h"
 #include "NVDAALDisplay.h"
 
 class NVDAAL : public IOService {
@@ -37,10 +38,15 @@ private:
     uint32_t chipImpl;
     uint16_t deviceId;
 
+    // GSP RM Handles
+    uint32_t hClient;
+    uint32_t hDevice;
+
     // Sub-components
     NVDAALGsp *gsp;
     NVDAALMemory *memory;
-    NVDAALQueue *computeQueue;
+    NVDAALVASpace *vaSpace;
+    NVDAALChannel *channel;
     NVDAALDisplay *display;
 
     // State

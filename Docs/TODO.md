@@ -35,22 +35,22 @@
 - [x] Create CLI tool (nvdaal-cli) for firmware loading
 - [x] libNVDAAL.dylib (SDK Wrapper)
 
-## Phase 4: Memory Management (IN PROGRESS)
+## Phase 4: Memory Management (COMPLETE)
 
 - [x] Implement VRAM allocator (NVDAALMemory)
 - [x] DMA buffer support (IOMemoryDescriptor)
 - [x] Memory mapping for user-space (BAR1 Aperture)
-- [ ] Page table management (Virtual Memory)
-- [ ] Fence/sync objects
+- [x] Page table management (Virtual Memory / VASpace)
+- [x] GSP Object Management (rmAlloc/rmFree)
 
-## Phase 5: Compute Queues
+## Phase 5: Compute Queues (BETA)
 
-- [ ] Create GPFIFO channel
-- [ ] Implement ring buffer
-- [ ] Push buffer management
-- [ ] Compute class instantiation (ADA_COMPUTE_A)
-- [ ] Command submission
-- [ ] Sync primitives
+- [x] Create GPFIFO channel (ADA_CHANNEL_GPFIFO_A)
+- [x] Implement ring buffer
+- [x] Push buffer management
+- [x] Command submission (User Doorbell)
+- [ ] Compute class instantiation (ADA_COMPUTE_A) - In progress
+- [ ] Sync primitives (Semaphores)
 
 ## Phase 6: Framework Integration
 

@@ -72,20 +72,28 @@ public:
     // Boot sequence
     bool boot(void);
     bool waitForInitDone(uint32_t timeoutMs = 5000);
+    uint32_t getBootStatus(void) const;
 
-    // RPC Communication
-    bool sendRpc(uint32_t function, const void *params, size_t paramsSize);
+    // RPC primitives
+    bool sendRpc(uint32_t function, const void *params, size_t size);
     bool waitRpcResponse(uint32_t function, void *response, size_t responseSize, uint32_t timeoutMs = 1000);
-
-    // System info
+    
+    // Higher level RPC helpers
     bool sendSystemInfo(void);
     bool setRegistry(const char *key, uint32_t value);
 
-    // State
-    bool isReady(void) const { return gspReady; }
-    uint32_t getBootStatus(void) const;
+    // Resource Manager (RM) Interface
+    // Used to create/manage GSP objects (Client -> Device -> SubDevice -> etc)
+    bool rmAlloc(uint32_t hClient, uint32_t hParent, uint32_t hObject, uint32_t hClass, void *params, size_t paramsSize);
+    bool rmControl(uint32_t hClient, uint32_t hObject, uint32_t cmd, void *params, size_t paramsSize);
+    bool rmFree(uint32_t hClient, uint32_t hParent, uint32_t hObject);
+
+    // Helpers to generate unique handles
+    uint32_t nextHandle() { return ++lastHandle; }
 
 private:
+    uint32_t lastHandle; // Simple handle generator
+
     // Hardware references
     IOPCIDevice *pciDevice;
     volatile uint32_t *mmioBase;
@@ -163,7 +171,7 @@ inline uint32_t NVDAALGsp::readReg(uint32_t offset) {
 
 inline void NVDAALGsp::writeReg(uint32_t offset, uint32_t value) {
     mmioBase[offset / 4] = value;
-    NV_MEMORY_BARRIER();
+    __sync_synchronize();
 }
 
 #endif // NVDAAL_GSP_H
