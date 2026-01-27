@@ -6,12 +6,12 @@ BUNDLE_ID = com.nvidia.nvdaal
 BUILD_DIR = Build
 KEXT_PATH = $(BUILD_DIR)/$(KEXT_NAME).kext
 INFO_PLIST = Info.plist
-SOURCE_FILE = Sources/NVDAAL.c
+SOURCE_FILE = Sources/NVDAAL.cpp
 
 # SDK e ferramentas
 SDKROOT = $(shell xcrun --show-sdk-path)
-CC = clang
-CFLAGS = -arch x86_64 \
+CXX = clang++
+CXXFLAGS = -arch x86_64 \
          -mmacosx-version-min=13.0 \
          -mkernel \
          -nostdinc \
@@ -42,7 +42,7 @@ $(KEXT_PATH): $(BUILD_DIR) $(KEXT_PATH)/Contents/MacOS/$(KEXT_NAME) $(KEXT_PATH)
 
 $(KEXT_PATH)/Contents/MacOS/$(KEXT_NAME): $(SOURCE_FILE)
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $<
+	$(CXX) $(CXXFLAGS) $(INCLUDES) $(LDFLAGS) -o $@ $<
 
 $(KEXT_PATH)/Contents/Info.plist: $(INFO_PLIST)
 	@mkdir -p $(dir $@)

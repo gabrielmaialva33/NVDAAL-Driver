@@ -1,5 +1,5 @@
 /*
- * NVDAAL.c - NVIDIA Ada Lovelace Driver for macOS Hackintosh
+ * NVDAAL.cpp - NVIDIA Ada Lovelace Driver for macOS Hackintosh
  *
  * Open Source driver for RTX 4090 (AD102) on macOS Tahoe
  * Part of the NVDAAL-Driver project
@@ -11,6 +11,8 @@
 #include <IOKit/pci/IOPCIDevice.h>
 #include <libkern/libkern.h>
 
+#define super IOService
+
 class NVDAAL : public IOService {
     OSDeclareDefaultStructors(NVDAAL);
 
@@ -20,7 +22,7 @@ private:
     volatile uint32_t *mmioBase;
 
 public:
-    virtual bool init(OSDictionary *dictionary = 0) override;
+    virtual bool init(OSDictionary *dictionary = nullptr) override;
     virtual void free(void) override;
     virtual IOService *probe(IOService *provider, SInt32 *score) override;
     virtual bool start(IOService *provider) override;
@@ -40,9 +42,9 @@ bool NVDAAL::init(OSDictionary *dictionary) {
         return false;
     }
 
-    pciDevice = NULL;
-    mmioMap = NULL;
-    mmioBase = NULL;
+    pciDevice = nullptr;
+    mmioMap = nullptr;
+    mmioBase = nullptr;
 
     IOLog("NVDAAL: Initialized\n");
     return true;
@@ -54,19 +56,19 @@ void NVDAAL::free(void) {
 }
 
 IOService *NVDAAL::probe(IOService *provider, SInt32 *score) {
-    pciDevice = OSDynamicCast(IOPCIDevice, provider);
-    if (!pciDevice) {
-        return NULL;
+    IOPCIDevice *device = OSDynamicCast(IOPCIDevice, provider);
+    if (!device) {
+        return nullptr;
     }
 
-    // Check for RTX 4090 (AD102)
-    UInt32 deviceID = pciDevice->configRead32(0x00);  // Vendor + Device ID
+    // Check for NVIDIA vendor
+    UInt32 deviceID = device->configRead32(0x00);
     UInt16 vendorID = deviceID & 0xFFFF;
     UInt16 deviceIDOnly = (deviceID >> 16) & 0xFFFF;
 
     if (vendorID != 0x10DE) {
-        IOLog("NVDAAL: Not an NVIDIA device (got vendor %04x)\n", vendorID);
-        return NULL;
+        IOLog("NVDAAL: Not an NVIDIA device (vendor %04x)\n", vendorID);
+        return nullptr;
     }
 
     // Supported devices (RTX 40 series - Ada Lovelace)
@@ -76,15 +78,15 @@ IOService *NVDAAL::probe(IOService *provider, SInt32 *score) {
         case 0x2702:  // RTX 4080 Super
         case 0x2704:  // RTX 4080
         case 0x2705:  // RTX 4070 Ti Super
-            IOLog("NVDAAL: Found supported Ada Lovelace GPU (Device ID: %04x)\n", deviceIDOnly);
+            IOLog("NVDAAL: Found Ada Lovelace GPU (Device ID: 0x%04x)\n", deviceIDOnly);
             break;
         default:
-            IOLog("NVDAAL: Unsupported device (Device ID: %04x)\n", deviceIDOnly);
-            return NULL;
+            IOLog("NVDAAL: Unsupported device (0x%04x)\n", deviceIDOnly);
+            return nullptr;
     }
 
     *score = 2000;
-    IOLog("NVDAAL: Probed RTX 4090 (AD102)\n");
+    IOLog("NVDAAL: Probe successful\n");
     return this;
 }
 
@@ -100,7 +102,7 @@ bool NVDAAL::start(IOService *provider) {
     }
 
     // Enable PCI device
-    pciDevice->setBusMasterEnable(true);
+    pciDevice->setBusLeadEnable(true);
     pciDevice->setMemoryEnable(true);
 
     // Map MMIO
@@ -114,10 +116,9 @@ bool NVDAAL::start(IOService *provider) {
     IOLog("NVDAAL: BOOT0 register = 0x%08x\n", boot0);
 
     // TODO: Load VBIOS
-    // TODO: Initialize PMU (Power Management Unit)
+    // TODO: Initialize PMU
     // TODO: Configure clocks
-    // TODO: Enable display output (DP/HDMI)
-    // TODO: Set up framebuffer
+    // TODO: Enable display
 
     IOLog("NVDAAL: RTX 4090 driver started\n");
     registerService();
@@ -125,7 +126,7 @@ bool NVDAAL::start(IOService *provider) {
 }
 
 void NVDAAL::stop(IOService *provider) {
-    IOLog("NVDAAL: Stopping RTX 4090 driver\n");
+    IOLog("NVDAAL: Stopping driver\n");
     unmapMMIO();
     super::stop(provider);
 }
@@ -144,7 +145,7 @@ bool NVDAAL::mapMMIO(void) {
 
     mmioBase = (volatile uint32_t *)mmioMap->getVirtualAddress();
     IOLog("NVDAAL: MMIO mapped at %p, size %llu bytes\n",
-          mmioBase, mmioMap->getLength());
+          (void *)mmioBase, mmioMap->getLength());
 
     return true;
 }
@@ -152,8 +153,8 @@ bool NVDAAL::mapMMIO(void) {
 void NVDAAL::unmapMMIO(void) {
     if (mmioMap) {
         mmioMap->release();
-        mmioMap = NULL;
-        mmioBase = NULL;
+        mmioMap = nullptr;
+        mmioBase = nullptr;
     }
 }
 
