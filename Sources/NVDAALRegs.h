@@ -117,15 +117,17 @@
 
 // ============================================================================
 // RISC-V Control (GSP Core on Ada+)
+// NOTE: On Ada Lovelace, GSP RISC-V registers are at 0x118000, not 0x110000!
+// The 0x110000 base is for GSP Falcon interface only.
 // ============================================================================
 
-#define NV_PRISCV_RISCV_BASE              0x00110000
+#define NV_PRISCV_RISCV_BASE              0x00118000
 
-#define NV_PRISCV_RISCV_CPUCTL            0x00110388
-#define NV_PRISCV_RISCV_BCR_CTRL          0x00110668
-#define NV_PRISCV_RISCV_BCR_DMEM_ADDR     0x0011066C
-#define NV_PRISCV_RISCV_BR_RETCODE        0x00110400
-#define NV_PRISCV_RISCV_CORE_HALT         0x00110544
+#define NV_PRISCV_RISCV_CPUCTL            0x00118388
+#define NV_PRISCV_RISCV_BCR_CTRL          0x00118668
+#define NV_PRISCV_RISCV_BCR_DMEM_ADDR     0x0011866C
+#define NV_PRISCV_RISCV_BR_RETCODE        0x00118400
+#define NV_PRISCV_RISCV_CORE_HALT         0x00118544
 
 // BCR_CTRL bits
 #define NV_PRISCV_RISCV_BCR_CTRL_VALID    (1 << 0)
