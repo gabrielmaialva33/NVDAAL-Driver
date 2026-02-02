@@ -58,6 +58,10 @@ IOReturn NVDAALUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
             return methodSubmitCommand(arguments);
         case kNVDAALMethodWaitSemaphore:
             return methodWaitSemaphore(arguments);
+        case kNVDAALMethodLoadBooterLoad:
+            return methodLoadBooterLoad(arguments);
+        case kNVDAALMethodLoadVbios:
+            return methodLoadVbios(arguments);
         default:
             return kIOReturnBadArgument;
     }
@@ -150,12 +154,16 @@ IOReturn NVDAALUserClient::methodLoadFirmware(IOExternalMethodArguments *args) {
     
     // Call driver to load firmware
     // Note: provider->loadGspFirmware needs to be implemented publicly in NVDAAL
-    bool ok = provider->loadGspFirmware(kernelAddr, size);
-    
+    int result = provider->loadGspFirmwareEx(kernelAddr, size);
+
     // Cleanup
     map->release();
     memDesc->complete(kIODirectionOut);
     memDesc->release();
 
-    return ok ? kIOReturnSuccess : kIOReturnError;
+    // Return specific error code from loadGspFirmwareEx
+    // 0 = success, 1+ = error stage
+    if (result == 0) return kIOReturnSuccess;
+    // Encode error stage in return code: 0xe0000300 + stage
+    return (IOReturn)(0xe0000300 + result);
 }
