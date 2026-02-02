@@ -142,8 +142,10 @@ sudo reboot
     - SEC2 FALCON reset
     - FWSEC-FRTS execution (WPR2 setup)
     - booter_load on SEC2 (HS mode)
-    - RISC-V core start with diagnostics
+    - RISC-V core start (correct 0x118000 base for Ada)
   - Detailed error stages (`bootEx()`)
+  - **Debug Mode**: Continues boot even on FWSEC/booter failures
+  - **Register Scanning**: Auto-detect RISC-V base address
 - :white_check_mark: **Full RPC Engine** (rmAlloc, rmControl)
 - :white_check_mark: **Interrupt Driven Architecture**
   - MSI (Message Signaled Interrupts) support

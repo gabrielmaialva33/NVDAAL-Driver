@@ -50,6 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Large firmware allocation failures on systems without 63MB contiguous memory
+- **RISC-V register base address** for Ada Lovelace (0x110000 → 0x118000)
+  - GSP RISC-V registers are at 0x118000, not 0x110000
+  - 0x110000 is for GSP Falcon interface only
+
+### Debug
+- **Debug mode**: Boot continues even when FWSEC-FRTS or booter_load fail
+- **Register scanning**: Probes multiple base addresses to find RISC-V registers
+- **Enhanced diagnostics**: Pre/post boot state, periodic status, final state dump
 
 ## [0.3.1] - 2026-01-30 - MMU Testing
 
