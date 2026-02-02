@@ -84,6 +84,10 @@ public:
 
     // Interface for User Client
     bool loadGspFirmware(const void *data, size_t size);
+    int loadGspFirmwareEx(const void *data, size_t size);  // Returns error stage (0=success)
+    bool loadBootloader(const void *data, size_t size);
+    bool loadBooterLoad(const void *data, size_t size);    // SEC2 booter firmware
+    bool loadVbios(const void *data, size_t size);         // VBIOS for FWSEC
     uint64_t allocVram(size_t size);
     bool submitCommand(uint32_t cmd);
     bool waitSemaphore(uint64_t gpuAddr, uint32_t value, uint32_t timeoutMs);

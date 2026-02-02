@@ -10,9 +10,20 @@
 
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <libkern/libkern.h>
+#include <mach/kmod.h>
 #include "NVDAALRegs.h"
 #include "NVDAALUserClient.h"
 #include "NVDAAL.h"
+
+// Required for modern macOS kext loading (kmutil/AuxKC)
+extern "C" {
+    extern kern_return_t _start(kmod_info_t *ki, void *data);
+    extern kern_return_t _stop(kmod_info_t *ki, void *data);
+    __attribute__((visibility("default"))) KMOD_EXPLICIT_DECL(com.nvdaal.compute, "1.0.0", _start, _stop)
+    __private_extern__ kmod_start_func_t *_realmain = 0;
+    __private_extern__ kmod_stop_func_t *_antimain = 0;
+    __private_extern__ int _kext_apple_cc = __APPLE_CC__;
+}
 
 #define super IOService
 
@@ -349,26 +360,58 @@ void NVDAAL::processInterrupt() {
 }
 
 bool NVDAAL::loadGspFirmware(const void *data, size_t size) {
+    return loadGspFirmwareEx(data, size) == 0;
+}
+
+// Load bootloader (must be called before loadGspFirmware)
+bool NVDAAL::loadBootloader(const void *data, size_t size) {
+    if (!gsp) return false;
+    return gsp->loadBootloader(data, size);
+}
+
+// Load booter_load firmware for SEC2 (should be called before loadGspFirmware)
+bool NVDAAL::loadBooterLoad(const void *data, size_t size) {
+    if (!gsp) return false;
+    IOLog("NVDAAL: Loading booter_load (%lu bytes)\n", size);
+    return gsp->loadBooterLoad(data, size);
+}
+
+// Load VBIOS for FWSEC extraction (optional - may have been done by EFI)
+bool NVDAAL::loadVbios(const void *data, size_t size) {
+    if (!gsp) return false;
+    IOLog("NVDAAL: Loading VBIOS (%lu bytes)\n", size);
+    return gsp->loadVbios(data, size);
+}
+
+// Returns: 0=success, 1+=error stage for debugging
+int NVDAAL::loadGspFirmwareEx(const void *data, size_t size) {
     if (!gsp) {
         IOLog("NVDAAL: GSP controller not available\n");
-        return false;
+        return 1;  // Error stage 1: No GSP
     }
 
     IOLog("NVDAAL: Received GSP firmware (%lu bytes)\n", size);
 
     if (!gsp->parseElfFirmware(data, size)) {
         IOLog("NVDAAL: Failed to parse firmware ELF\n");
-        return false;
+        return 2;  // Error stage 2: ELF parse failed
     }
-    
-    if (!gsp->boot()) {
-        IOLog("NVDAAL: Failed to boot GSP\n");
-        return false;
+
+    // Check if bootloader was loaded
+    if (!gsp->hasBootloader()) {
+        IOLog("NVDAAL: Warning: Bootloader not loaded - boot may fail\n");
+        // Continue anyway for testing
+    }
+
+    int bootResult = gsp->bootEx();
+    if (bootResult != 0) {
+        IOLog("NVDAAL: Failed to boot GSP (stage %d)\n", bootResult);
+        return 3;  // Error stage 3: Boot failed
     }
 
     if (!gsp->waitForInitDone()) {
         IOLog("NVDAAL: Timeout waiting for GSP init\n");
-        return false;
+        return 4;  // Error stage 4: Init timeout
     }
 
     IOLog("NVDAAL: GSP successfully initialized!\n");
