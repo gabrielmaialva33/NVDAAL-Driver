@@ -14,6 +14,8 @@
 #define METHOD_ALLOC_VRAM 1
 #define METHOD_SUBMIT_CMD 2
 #define METHOD_WAIT_SYNC 3
+#define METHOD_LOAD_BOOTER 4
+#define METHOD_LOAD_VBIOS 5
 
 namespace nvdaal {
 
@@ -78,13 +80,17 @@ bool Client::loadFirmware(const void* data, size_t size) {
     if (!connect()) return false;
 
     uint64_t args[2] = { (uint64_t)data, (uint64_t)size };
-    
+
     kern_return_t kr = IOConnectCallScalarMethod(
         (io_connect_t)connection,
         METHOD_LOAD_FIRMWARE,
         args, 2,
         NULL, NULL
     );
+
+    if (kr != KERN_SUCCESS) {
+        std::cerr << "[libNVDAAL] loadFirmware failed: 0x" << std::hex << kr << std::dec << std::endl;
+    }
 
     return (kr == KERN_SUCCESS);
 }
