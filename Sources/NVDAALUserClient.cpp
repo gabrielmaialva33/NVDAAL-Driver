@@ -167,3 +167,93 @@ IOReturn NVDAALUserClient::methodLoadFirmware(IOExternalMethodArguments *args) {
     // Encode error stage in return code: 0xe0000300 + stage
     return (IOReturn)(0xe0000300 + result);
 }
+
+IOReturn NVDAALUserClient::methodLoadBooterLoad(IOExternalMethodArguments *args) {
+    // Load booter_load firmware for SEC2
+    // Input[0]: Pointer to booter_load data
+    // Input[1]: Size
+
+    if (args->scalarInputCount != 2) {
+        return kIOReturnBadArgument;
+    }
+
+    mach_vm_address_t userPtr = (mach_vm_address_t)args->scalarInput[0];
+    mach_vm_size_t size = (mach_vm_size_t)args->scalarInput[1];
+
+    IOLog("NVDAALUserClient: LoadBooterLoad. Ptr: 0x%llx, Size: %llu\n", userPtr, size);
+
+    if (size == 0 || size > 0x100000) {  // Max 1MB for booter
+        return kIOReturnBadArgument;
+    }
+
+    IOMemoryDescriptor *memDesc = IOMemoryDescriptor::withAddressRange(
+        userPtr, size, kIODirectionOut, clientTask);
+    if (!memDesc) return kIOReturnNoMemory;
+
+    IOReturn ret = memDesc->prepare(kIODirectionOut);
+    if (ret != kIOReturnSuccess) {
+        memDesc->release();
+        return ret;
+    }
+
+    IOMemoryMap *map = memDesc->map();
+    if (!map) {
+        memDesc->complete(kIODirectionOut);
+        memDesc->release();
+        return kIOReturnVMError;
+    }
+
+    void *kernelAddr = (void *)map->getVirtualAddress();
+    bool ok = provider->loadBooterLoad(kernelAddr, size);
+
+    map->release();
+    memDesc->complete(kIODirectionOut);
+    memDesc->release();
+
+    return ok ? kIOReturnSuccess : kIOReturnError;
+}
+
+IOReturn NVDAALUserClient::methodLoadVbios(IOExternalMethodArguments *args) {
+    // Load VBIOS for FWSEC extraction
+    // Input[0]: Pointer to VBIOS data
+    // Input[1]: Size
+
+    if (args->scalarInputCount != 2) {
+        return kIOReturnBadArgument;
+    }
+
+    mach_vm_address_t userPtr = (mach_vm_address_t)args->scalarInput[0];
+    mach_vm_size_t size = (mach_vm_size_t)args->scalarInput[1];
+
+    IOLog("NVDAALUserClient: LoadVbios. Ptr: 0x%llx, Size: %llu\n", userPtr, size);
+
+    if (size == 0 || size > 0x400000) {  // Max 4MB for VBIOS
+        return kIOReturnBadArgument;
+    }
+
+    IOMemoryDescriptor *memDesc = IOMemoryDescriptor::withAddressRange(
+        userPtr, size, kIODirectionOut, clientTask);
+    if (!memDesc) return kIOReturnNoMemory;
+
+    IOReturn ret = memDesc->prepare(kIODirectionOut);
+    if (ret != kIOReturnSuccess) {
+        memDesc->release();
+        return ret;
+    }
+
+    IOMemoryMap *map = memDesc->map();
+    if (!map) {
+        memDesc->complete(kIODirectionOut);
+        memDesc->release();
+        return kIOReturnVMError;
+    }
+
+    void *kernelAddr = (void *)map->getVirtualAddress();
+    bool ok = provider->loadVbios(kernelAddr, size);
+
+    map->release();
+    memDesc->complete(kIODirectionOut);
+    memDesc->release();
+
+    return ok ? kIOReturnSuccess : kIOReturnError;
+}
