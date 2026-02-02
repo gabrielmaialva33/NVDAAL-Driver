@@ -19,13 +19,16 @@ NVDAALGsp::NVDAALGsp(void) {
     initialized = false;
     gspReady = false;
     rpcSeqNum = 0;
+    lastHandle = 0;
 
     cmdQueueMem = nullptr;
     statQueueMem = nullptr;
     firmwareMem = nullptr;
     bootloaderMem = nullptr;
+    booterLoadMem = nullptr;
     wprMetaMem = nullptr;
     radix3Mem = nullptr;
+    fwsecMem = nullptr;
 
     cmdQueue = nullptr;
     statQueue = nullptr;
@@ -33,6 +36,9 @@ NVDAALGsp::NVDAALGsp(void) {
     cmdQueueTail = 0;
     statQueueHead = 0;
     statQueueTail = 0;
+
+    wpr2Lo = 0;
+    wpr2Hi = 0;
 }
 
 NVDAALGsp::~NVDAALGsp(void) {
@@ -107,6 +113,8 @@ void NVDAALGsp::free(void) {
 
     freeDmaBuffer(&radix3Mem);
     freeDmaBuffer(&wprMetaMem);
+    freeDmaBuffer(&fwsecMem);
+    freeDmaBuffer(&booterLoadMem);
     freeDmaBuffer(&bootloaderMem);
     freeDmaBuffer(&firmwareMem);
     freeDmaBuffer(&statQueueMem);
@@ -116,6 +124,9 @@ void NVDAALGsp::free(void) {
     statQueue = nullptr;
     mmioBase = nullptr;
     pciDevice = nullptr;
+
+    wpr2Lo = 0;
+    wpr2Hi = 0;
 }
 
 // ============================================================================
@@ -187,6 +198,52 @@ bool NVDAALGsp::loadBootloader(const void *data, size_t size) {
     return true;
 }
 
+bool NVDAALGsp::loadBooterLoad(const void *data, size_t size) {
+    if (!initialized) {
+        return false;
+    }
+
+    // Free existing if any
+    freeDmaBuffer(&booterLoadMem);
+
+    // Allocate memory for booter_load (SEC2 ucode)
+    if (!allocDmaBuffer(&booterLoadMem, size, &booterLoadPhys)) {
+        IOLog("NVDAAL-GSP: Failed to allocate booter_load memory\n");
+        return false;
+    }
+
+    // Copy booter data
+    memcpy(booterLoadMem->getBytesNoCopy(), data, size);
+
+    IOLog("NVDAAL-GSP: booter_load loaded (%lu bytes) @ 0x%llx\n",
+          (unsigned long)size, booterLoadPhys);
+
+    return true;
+}
+
+bool NVDAALGsp::loadVbios(const void *data, size_t size) {
+    if (!initialized) {
+        return false;
+    }
+
+    // Free existing if any
+    freeDmaBuffer(&fwsecMem);
+
+    // Allocate memory for VBIOS/FWSEC
+    if (!allocDmaBuffer(&fwsecMem, size, &fwsecPhys)) {
+        IOLog("NVDAAL-GSP: Failed to allocate VBIOS memory\n");
+        return false;
+    }
+
+    // Copy VBIOS data
+    memcpy(fwsecMem->getBytesNoCopy(), data, size);
+
+    IOLog("NVDAAL-GSP: VBIOS loaded (%lu bytes) @ 0x%llx\n",
+          (unsigned long)size, fwsecPhys);
+
+    return true;
+}
+
 bool NVDAALGsp::parseElfFirmware(const void *data, size_t size) {
     const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)data;
     const uint8_t *bytes = (const uint8_t *)data;
@@ -235,20 +292,37 @@ bool NVDAALGsp::parseElfFirmware(const void *data, size_t size) {
         if (strcmp(name, GSP_FW_SECTION_IMAGE) == 0) {
             IOLog("NVDAAL-GSP: Found .fwimage: offset 0x%llx, size 0x%llx\n",
                   shdr->offset, shdr->size);
-            
+
             firmwareCodeOffset = shdr->offset;
             firmwareSize = shdr->size;
-            
-            // Allocate firmware memory
-            if (!allocDmaBuffer(&firmwareMem, firmwareSize, &firmwarePhys)) {
-                IOLog("NVDAAL-GSP: Failed to allocate firmware memory\n");
+
+            // Allocate firmware memory (non-contiguous, DMA-able)
+            // NOTE: For large firmware (63MB), we can't use physically contiguous
+            firmwareMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+                kernel_task,
+                kIODirectionInOut,  // No kIOMemoryPhysicallyContiguous for large allocs
+                firmwareSize,
+                0xFFFFFFFFFFFFULL   // 48-bit physical address mask
+            );
+
+            if (!firmwareMem) {
+                IOLog("NVDAAL-GSP: Failed to allocate firmware memory (%llu bytes)\n",
+                      (unsigned long long)firmwareSize);
+                return false;
+            }
+
+            IOReturn ret = firmwareMem->prepare();
+            if (ret != kIOReturnSuccess) {
+                IOLog("NVDAAL-GSP: Failed to prepare firmware memory (0x%x)\n", ret);
+                firmwareMem->release();
+                firmwareMem = nullptr;
                 return false;
             }
 
             // Copy firmware data
             memcpy(firmwareMem->getBytesNoCopy(), bytes + shdr->offset, shdr->size);
-            
-            // Build the page table for this firmware
+
+            // Build the page table for this firmware (handles non-contiguous pages)
             if (!buildRadix3PageTable(firmwareMem->getBytesNoCopy(), firmwareSize)) {
                 return false;
             }
@@ -331,15 +405,20 @@ bool NVDAALGsp::buildRadix3PageTable(const void *firmware, size_t size) {
     }
     
     // Fill L2 Tables (Leafs) - Point to Firmware Data Pages
-    uint64_t fwPhys = firmwarePhys; // Base physical address of firmware blob
-    
+    // NOTE: Firmware memory may not be physically contiguous, so we must
+    // get the physical address of each page individually from the descriptor
     for (uint64_t i = 0; i < numPages; i++) {
-        // Each entry points to a 4KB page of the firmware
-        l2Table[i] = (fwPhys + (i * GSP_PAGE_SIZE)) | 1; // Mark Valid
+        IOByteCount segLen;
+        uint64_t pagePhys = firmwareMem->getPhysicalSegment(i * GSP_PAGE_SIZE, &segLen);
+        if (pagePhys == 0) {
+            IOLog("NVDAAL-GSP: Failed to get physical address for page %llu\n", i);
+            return false;
+        }
+        l2Table[i] = pagePhys | 1; // Mark Valid
     }
-    
-    IOLog("NVDAAL-GSP: Radix3 built. Root: 0x%llx, Size: %lu bytes\n", 
-          radix3Phys, tableSize);
+
+    IOLog("NVDAAL-GSP: Radix3 built. Root: 0x%llx, Pages: %llu, TableSize: %lu bytes\n",
+          radix3Phys, numPages, tableSize);
     
     return true;
 }
@@ -392,41 +471,94 @@ bool NVDAALGsp::setupWprMeta(void) {
 // Boot Sequence
 // ============================================================================
 
-bool NVDAALGsp::boot(void) {
+// Returns boot stage for debugging (0=success, negative=error at stage)
+int NVDAALGsp::bootEx(void) {
     if (!initialized) {
         IOLog("NVDAAL-GSP: Not initialized\n");
-        return false;
+        return -1;
     }
 
-    IOLog("NVDAAL-GSP: Starting boot sequence...\n");
+    IOLog("NVDAAL-GSP: Starting boot sequence (Ada Lovelace)...\n");
 
-    // Step 1: Reset FALCON
+    // Read current GSP state
+    uint32_t riscvCtl = readReg(NV_PRISCV_RISCV_CPUCTL);
+    uint32_t falconCtl = readReg(NV_PGSP_FALCON_CPUCTL);
+    uint32_t wpr2Hi = readReg(NV_PFB_PRI_MMU_WPR2_ADDR_HI);
+    IOLog("NVDAAL-GSP: Pre-boot state: RISCV_CTL=0x%08x FALCON_CTL=0x%08x WPR2_HI=0x%08x\n",
+          riscvCtl, falconCtl, wpr2Hi);
+
+    // Check if WPR2 is already set up (by EFI/previous driver)
+    if (NV_PFB_WPR2_ENABLED(wpr2Hi)) {
+        IOLog("NVDAAL-GSP: WPR2 already active - need GPU reset first\n");
+        // For now, we'll try to continue - may need PCI reset
+    }
+
+    // Step 1: Reset both FALCON and SEC2
+    IOLog("NVDAAL-GSP: Step 1 - Reset GSP FALCON\n");
     if (!resetFalcon()) {
         IOLog("NVDAAL-GSP: FALCON reset failed\n");
-        return false;
+        return -2;
     }
 
-    // Step 2: Execute FWSEC (from VBIOS)
-    // TODO: This requires VBIOS parsing
-    // if (!executeFwsec()) {
-    //     return false;
-    // }
+    IOLog("NVDAAL-GSP: Step 1b - Reset SEC2\n");
+    if (!resetSec2()) {
+        IOLog("NVDAAL-GSP: SEC2 reset failed (continuing anyway)\n");
+        // Non-fatal for now
+    }
+
+    // Step 2: Execute FWSEC-FRTS to set up WPR2
+    // (This requires VBIOS to be loaded, or WPR2 already set by EFI)
+    if (fwsecMem) {
+        IOLog("NVDAAL-GSP: Step 2 - Execute FWSEC-FRTS\n");
+        if (!executeFwsecFrts()) {
+            IOLog("NVDAAL-GSP: FWSEC-FRTS failed\n");
+            return -3;
+        }
+    } else {
+        IOLog("NVDAAL-GSP: Step 2 - FWSEC not loaded, checking WPR2 status\n");
+        if (!checkWpr2Setup()) {
+            IOLog("NVDAAL-GSP: WPR2 not set up and no FWSEC available\n");
+            // Try to continue anyway - maybe booter can handle it
+        }
+    }
 
     // Step 3: Setup WPR metadata
+    IOLog("NVDAAL-GSP: Step 3 - Setup WPR metadata\n");
     if (!setupWprMeta()) {
         IOLog("NVDAAL-GSP: WPR meta setup failed\n");
-        return false;
+        return -4;
     }
 
-    // Step 4: Start RISC-V core
+    // Step 4: Execute booter_load on SEC2 (if available)
+    if (booterLoadMem) {
+        IOLog("NVDAAL-GSP: Step 4 - Execute booter_load on SEC2\n");
+        if (!executeBooterLoad()) {
+            IOLog("NVDAAL-GSP: booter_load execution failed\n");
+            return -5;
+        }
+    } else {
+        IOLog("NVDAAL-GSP: Step 4 - No booter_load, trying direct RISC-V start\n");
+    }
+
+    // Step 5: Start RISC-V core
+    IOLog("NVDAAL-GSP: Step 5 - Start RISC-V core\n");
     if (!startRiscv()) {
         IOLog("NVDAAL-GSP: RISC-V start failed\n");
-        return false;
+        // Read post-boot state for diagnostics
+        uint32_t retcode = readReg(NV_PRISCV_RISCV_BR_RETCODE);
+        riscvCtl = readReg(NV_PRISCV_RISCV_CPUCTL);
+        uint32_t scratch14 = readReg(NV_PGC6_BSI_SECURE_SCRATCH_14);
+        IOLog("NVDAAL-GSP: Post-boot: RISCV_CTL=0x%08x BR_RETCODE=0x%08x SCRATCH14=0x%08x\n",
+              riscvCtl, retcode, scratch14);
+        return -6;
     }
 
-    IOLog("NVDAAL-GSP: Boot sequence initiated\n");
+    IOLog("NVDAAL-GSP: Boot sequence initiated, waiting for init...\n");
+    return 0;
+}
 
-    return true;
+bool NVDAALGsp::boot(void) {
+    return bootEx() == 0;
 }
 
 bool NVDAALGsp::resetFalcon(void) {
@@ -445,6 +577,154 @@ bool NVDAALGsp::resetFalcon(void) {
     }
 
     return true;
+}
+
+bool NVDAALGsp::resetSec2(void) {
+    // Reset SEC2 FALCON
+    IOLog("NVDAAL-GSP: Resetting SEC2...\n");
+
+    writeReg(NV_PSEC_FALCON_CPUCTL, 0);
+    IODelay(100);
+
+    uint32_t cpuctl = readReg(NV_PSEC_FALCON_CPUCTL);
+    if (!(cpuctl & FALCON_CPUCTL_HALTED)) {
+        IOLog("NVDAAL-GSP: SEC2 not halted after reset\n");
+    }
+
+    return true;
+}
+
+bool NVDAALGsp::checkWpr2Setup(void) {
+    // Check if WPR2 has been set up by FWSEC
+    uint32_t wpr2HiReg = readReg(NV_PFB_PRI_MMU_WPR2_ADDR_HI);
+    uint32_t wpr2LoReg = readReg(NV_PFB_PRI_MMU_WPR2_ADDR_LO);
+
+    if (NV_PFB_WPR2_ENABLED(wpr2HiReg)) {
+        // Read actual WPR2 bounds
+        wpr2Hi = ((uint64_t)(wpr2HiReg & 0xFFFFF) << 32) | (wpr2LoReg & 0xFFF00000);
+        wpr2Lo = ((uint64_t)(readReg(NV_PFB_PRI_MMU_WPR2_ADDR_LO_VAL) & 0xFFFFF) << 12);
+
+        IOLog("NVDAAL-GSP: WPR2 active: 0x%llx - 0x%llx\n", wpr2Lo, wpr2Hi);
+        return true;
+    }
+
+    IOLog("NVDAAL-GSP: WPR2 not active\n");
+    return false;
+}
+
+uint64_t NVDAALGsp::getWpr2Lo(void) {
+    return wpr2Lo;
+}
+
+uint64_t NVDAALGsp::getWpr2Hi(void) {
+    return wpr2Hi;
+}
+
+bool NVDAALGsp::executeFwsecFrts(void) {
+    // Execute FWSEC-FRTS to set up WPR2 region
+    // This is a complex process that involves:
+    // 1. Loading FWSEC ucode from VBIOS
+    // 2. Configuring DMEMMAPPER interface
+    // 3. Running FWSEC in Heavy-Secure mode on GSP
+    // 4. Reading back WPR2 bounds
+
+    IOLog("NVDAAL-GSP: FWSEC-FRTS execution (simplified)...\n");
+
+    if (!fwsecMem) {
+        IOLog("NVDAAL-GSP: No FWSEC/VBIOS loaded\n");
+        return false;
+    }
+
+    // For now, just check if WPR2 got set up (may have been done by EFI)
+    // TODO: Full FWSEC implementation requires:
+    //   - Parsing VBIOS to find FWSEC partition
+    //   - Loading FWSEC ucode to GSP IMEM/DMEM
+    //   - Configuring FRTS command parameters
+    //   - Starting GSP in HS mode
+    //   - Waiting for completion
+
+    IODelay(1000);  // Small delay
+
+    if (checkWpr2Setup()) {
+        IOLog("NVDAAL-GSP: FWSEC-FRTS: WPR2 is set up\n");
+        return true;
+    }
+
+    IOLog("NVDAAL-GSP: FWSEC-FRTS: WPR2 not set up after FWSEC\n");
+    return false;
+}
+
+bool NVDAALGsp::executeBooterLoad(void) {
+    // Execute booter_load on SEC2 to authenticate and load GSP-RM
+    // Booter runs in Heavy-Secure mode on SEC2 FALCON
+
+    IOLog("NVDAAL-GSP: Executing booter_load on SEC2...\n");
+
+    if (!booterLoadMem) {
+        IOLog("NVDAAL-GSP: No booter_load firmware\n");
+        return false;
+    }
+
+    // Reset SEC2
+    writeReg(NV_PSEC_FALCON_CPUCTL, 0);
+    IODelay(100);
+
+    // The booter firmware has a header that describes IMEM/DMEM layout
+    // For now, we'll try a simplified approach
+
+    const uint8_t *booterData = (const uint8_t *)booterLoadMem->getBytesNoCopy();
+    size_t booterSize = booterLoadMem->getLength();
+
+    // Read booter header (simplified - real format is more complex)
+    // The actual format includes HS header, code/data offsets, signatures
+    if (booterSize < 256) {
+        IOLog("NVDAAL-GSP: booter_load too small\n");
+        return false;
+    }
+
+    IOLog("NVDAAL-GSP: booter_load size: %lu bytes\n", (unsigned long)booterSize);
+
+    // Setup mailbox with WPR meta address for booter
+    uint32_t mailbox0 = (uint32_t)(wprMetaPhys & 0xFFFFFFFF);
+    uint32_t mailbox1 = (uint32_t)(wprMetaPhys >> 32);
+
+    writeReg(NV_PSEC_FALCON_MAILBOX0, mailbox0);
+    writeReg(NV_PSEC_FALCON_MAILBOX1, mailbox1);
+
+    // Configure DMA base for booter code
+    writeReg(NV_PSEC_FALCON_DMATRFBASE, (uint32_t)(booterLoadPhys >> 8));
+
+    // For proper boot, we need to:
+    // 1. Load IMEM (instruction memory)
+    // 2. Load DMEM (data memory)
+    // 3. Set boot vector
+    // 4. Start CPU
+
+    // Simplified: try to start SEC2 and see what happens
+    writeReg(NV_PSEC_FALCON_BOOTVEC, 0);  // Boot at offset 0
+    writeReg(NV_PSEC_FALCON_CPUCTL, FALCON_CPUCTL_STARTCPU);
+
+    // Wait for SEC2 to finish
+    for (int i = 0; i < 100; i++) {
+        uint32_t cpuctl = readReg(NV_PSEC_FALCON_CPUCTL);
+        if (cpuctl & FALCON_CPUCTL_HALTED) {
+            // Check mailbox for status
+            uint32_t result = readReg(NV_PSEC_FALCON_MAILBOX0);
+            IOLog("NVDAAL-GSP: SEC2 halted, mailbox0=0x%08x\n", result);
+
+            if (result == 0) {
+                IOLog("NVDAAL-GSP: booter_load completed successfully\n");
+                return true;
+            } else {
+                IOLog("NVDAAL-GSP: booter_load failed with error 0x%x\n", result);
+                return false;
+            }
+        }
+        IODelay(1000);  // 1ms
+    }
+
+    IOLog("NVDAAL-GSP: Timeout waiting for SEC2/booter\n");
+    return false;
 }
 
 bool NVDAALGsp::startRiscv(void) {
