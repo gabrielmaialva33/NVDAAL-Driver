@@ -510,3 +510,34 @@ void NVDAAL::writeReg(uint32_t offset, uint32_t value) {
         __sync_synchronize();
     }
 }
+
+// ============================================================================
+// Status Reporting
+// ============================================================================
+
+bool NVDAAL::getStatus(GpuStatus *status) {
+    if (!status || !mmioBase) {
+        return false;
+    }
+
+    // Read all relevant registers
+    status->pmcBoot0 = readReg(NV_PMC_BOOT_0);
+    status->wpr2Lo = readReg(NV_PFB_PRI_MMU_WPR2_ADDR_LO);
+    status->wpr2Hi = readReg(NV_PFB_PRI_MMU_WPR2_ADDR_HI);
+    status->wpr2Enabled = (status->wpr2Hi >> 31) & 1;  // Bit 31 = enabled
+
+    // GSP RISC-V status
+    status->gspRiscvCpuctl = readReg(NV_PRISCV_RISCV_CPUCTL);
+
+    // SEC2 RISC-V status
+    status->sec2RiscvCpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+
+    // GSP Falcon mailboxes (for RPC status)
+    status->gspFalconMailbox0 = readReg(NV_PGSP_FALCON_MAILBOX0);
+    status->gspFalconMailbox1 = readReg(NV_PGSP_FALCON_MAILBOX1);
+
+    // Boot scratch register
+    status->bootScratch = readReg(NV_PGC6_BSI_SECURE_SCRATCH_14);
+
+    return true;
+}

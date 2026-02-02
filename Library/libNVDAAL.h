@@ -15,6 +15,19 @@
 
 namespace nvdaal {
 
+// GPU Status structure (matches NVDAAL::GpuStatus in kernel)
+struct GpuStatus {
+    uint32_t pmcBoot0;           // Chip ID
+    uint32_t wpr2Lo;             // WPR2 low address
+    uint32_t wpr2Hi;             // WPR2 high address
+    bool     wpr2Enabled;        // WPR2 active flag
+    uint32_t gspRiscvCpuctl;     // GSP RISC-V CPUCTL
+    uint32_t sec2RiscvCpuctl;    // SEC2 RISC-V CPUCTL
+    uint32_t gspFalconMailbox0;  // GSP Falcon mailbox
+    uint32_t gspFalconMailbox1;
+    uint32_t bootScratch;        // Boot stage scratch register
+};
+
 class Client {
 public:
     Client();
@@ -41,6 +54,9 @@ public:
     uint64_t allocVram(size_t size);
     bool submitCommand(uint32_t cmd);
     bool waitSemaphore(uint64_t gpuAddr, uint32_t value);
+
+    // Status
+    bool getStatus(GpuStatus *status);
     
     // Future: Command Buffer abstraction
     // struct CommandBuffer { ... };

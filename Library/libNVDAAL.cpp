@@ -17,6 +17,7 @@
 #define METHOD_LOAD_BOOTER 4
 #define METHOD_LOAD_VBIOS 5
 #define METHOD_LOAD_BOOTLOADER 6
+#define METHOD_GET_STATUS 7
 
 namespace nvdaal {
 
@@ -253,6 +254,26 @@ bool Client::loadVbios(const void* data, size_t size) {
     }
 
     return (kr == KERN_SUCCESS);
+}
+
+bool Client::getStatus(GpuStatus *status) {
+    if (!connect() || !status) return false;
+
+    size_t outputSize = sizeof(GpuStatus);
+
+    kern_return_t kr = IOConnectCallStructMethod(
+        (io_connect_t)connection,
+        METHOD_GET_STATUS,
+        NULL, 0,                      // No input
+        status, &outputSize           // Output: GpuStatus struct
+    );
+
+    if (kr != KERN_SUCCESS) {
+        std::cerr << "[libNVDAAL] getStatus failed: 0x" << std::hex << kr << std::dec << std::endl;
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace nvdaal

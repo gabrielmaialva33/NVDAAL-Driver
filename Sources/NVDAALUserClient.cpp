@@ -64,6 +64,8 @@ IOReturn NVDAALUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
             return methodLoadVbios(arguments);
         case kNVDAALMethodLoadBootloader:
             return methodLoadBootloader(arguments);
+        case kNVDAALMethodGetStatus:
+            return methodGetStatus(arguments);
         default:
             return kIOReturnBadArgument;
     }
@@ -303,4 +305,21 @@ IOReturn NVDAALUserClient::methodLoadBootloader(IOExternalMethodArguments *args)
     memDesc->release();
 
     return ok ? kIOReturnSuccess : kIOReturnError;
+}
+
+IOReturn NVDAALUserClient::methodGetStatus(IOExternalMethodArguments *args) {
+    // Returns GPU status registers via structureOutput
+    // Expected: structureOutputSize >= sizeof(NVDAAL::GpuStatus)
+
+    if (!args->structureOutput || args->structureOutputSize < sizeof(NVDAAL::GpuStatus)) {
+        return kIOReturnBadArgument;
+    }
+
+    NVDAAL::GpuStatus status;
+    if (!provider->getStatus(&status)) {
+        return kIOReturnError;
+    }
+
+    memcpy(args->structureOutput, &status, sizeof(NVDAAL::GpuStatus));
+    return kIOReturnSuccess;
 }

@@ -63,7 +63,7 @@ Hardware:
 | `Sources/NVDAALUserClient.cpp` | IOUserClient: external method dispatcher |
 | `Sources/NVDAALMemory.cpp` | Linear VRAM allocator |
 | `Sources/NVDAALQueue.cpp` | Ring buffer command queue |
-| `Sources/NVDAALRegs.h` | GPU register offset definitions (306 lines) |
+| `Sources/NVDAALRegs.h` | GPU register offsets + VBIOS structures (~650 lines) |
 | `Library/libNVDAAL.cpp` | User-space C++ SDK wrapper |
 | `Tools/nvdaal-cli/` | CLI firmware loader tool |
 
@@ -73,6 +73,13 @@ Hardware:
 - RISC-V core on GPU running firmware `gsp-570.144.bin`
 - RPC protocol: signature 0x43505256, version 3
 - Key functions: 0x15 (SYSTEM_INFO), 0x16 (SET_REGISTRY), 0x52 (INIT_DONE)
+
+### VBIOS / FWSEC
+
+- FWSEC-FRTS sets up WPR2 (Write Protected Region 2) for GSP
+- VBIOS parsed for: ROM headers (0x55AA), PCIR, BIT table, PMU Lookup Table
+- FWSEC image identified by PCIR codeType = 0xE0
+- DMEMMAPPER patched with command 0x15 (FRTS) before Falcon execution
 
 ### Memory Layout
 
