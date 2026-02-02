@@ -7,7 +7,7 @@
     <key>CFBundleExecutable</key>
     <string>NVDAAL</string>
     <key>CFBundleIdentifier</key>
-    <string>com.nvidia.nvdaal</string>
+    <string>com.nvdaal.compute</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -23,7 +23,7 @@
         <key>NVDAAL</key>
         <dict>
             <key>CFBundleIdentifier</key>
-            <string>com.nvidia.nvdaal</string>
+            <string>com.nvdaal.compute</string>
             <key>IOClass</key>
             <string>NVDAAL</string>
             <key>IOPCIPrimaryMatch</key>
@@ -49,6 +49,8 @@
         <string>16.0</string>
         <key>com.apple.kpi.mach</key>
         <string>16.0</string>
+        <key>com.apple.iokit.IOPCIFamily</key>
+        <string>2.9</string>
     </dict>
     <key>OSBundleRequired</key>
     <string>Root</string>
