@@ -38,6 +38,7 @@ public:
     IOReturn methodLoadVbios(IOExternalMethodArguments *args);
     IOReturn methodLoadBootloader(IOExternalMethodArguments *args);
     IOReturn methodGetStatus(IOExternalMethodArguments *args);
+    IOReturn methodExecuteFwsec(IOExternalMethodArguments *args);
 };
 
 // Method Selectors
@@ -50,6 +51,7 @@ enum {
     kNVDAALMethodLoadVbios,
     kNVDAALMethodLoadBootloader,
     kNVDAALMethodGetStatus,
+    kNVDAALMethodExecuteFwsec,
     kNVDAALMethodCount
 };
 

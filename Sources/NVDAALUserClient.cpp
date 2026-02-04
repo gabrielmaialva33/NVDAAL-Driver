@@ -66,6 +66,8 @@ IOReturn NVDAALUserClient::externalMethod(uint32_t selector, IOExternalMethodArg
             return methodLoadBootloader(arguments);
         case kNVDAALMethodGetStatus:
             return methodGetStatus(arguments);
+        case kNVDAALMethodExecuteFwsec:
+            return methodExecuteFwsec(arguments);
         default:
             return kIOReturnBadArgument;
     }
@@ -308,18 +310,45 @@ IOReturn NVDAALUserClient::methodLoadBootloader(IOExternalMethodArguments *args)
 }
 
 IOReturn NVDAALUserClient::methodGetStatus(IOExternalMethodArguments *args) {
-    // Returns GPU status registers via structureOutput
-    // Expected: structureOutputSize >= sizeof(NVDAAL::GpuStatus)
+    // Returns GPU status registers via scalarOutput
+    // Output[0-8]: status values
 
-    if (!args->structureOutput || args->structureOutputSize < sizeof(NVDAAL::GpuStatus)) {
+    if (args->scalarOutputCount < 9) {
+        IOLog("NVDAALUserClient: GetStatus needs 9 scalar outputs, got %u\n", args->scalarOutputCount);
         return kIOReturnBadArgument;
     }
 
     NVDAAL::GpuStatus status;
     if (!provider->getStatus(&status)) {
+        IOLog("NVDAALUserClient: GetStatus failed to read registers\n");
         return kIOReturnError;
     }
 
-    memcpy(args->structureOutput, &status, sizeof(NVDAAL::GpuStatus));
+    args->scalarOutput[0] = status.pmcBoot0;
+    args->scalarOutput[1] = status.wpr2Lo;
+    args->scalarOutput[2] = status.wpr2Hi;
+    args->scalarOutput[3] = status.wpr2Enabled ? 1 : 0;
+    args->scalarOutput[4] = status.gspRiscvCpuctl;
+    args->scalarOutput[5] = status.sec2RiscvCpuctl;
+    args->scalarOutput[6] = status.gspFalconMailbox0;
+    args->scalarOutput[7] = status.gspFalconMailbox1;
+    args->scalarOutput[8] = status.bootScratch;
+
     return kIOReturnSuccess;
+}
+
+IOReturn NVDAALUserClient::methodExecuteFwsec(IOExternalMethodArguments *args) {
+    // Execute FWSEC-FRTS to configure WPR2
+    // No inputs required - uses previously loaded VBIOS
+    // Output[0]: 1 if WPR2 configured, 0 otherwise
+
+    IOLog("NVDAALUserClient: Executing FWSEC-FRTS...\n");
+
+    bool result = provider->executeFwsec();
+
+    if (args->scalarOutputCount >= 1) {
+        args->scalarOutput[0] = result ? 1 : 0;
+    }
+
+    return result ? kIOReturnSuccess : kIOReturnError;
 }

@@ -383,6 +383,12 @@ bool NVDAAL::loadVbios(const void *data, size_t size) {
     return gsp->loadVbios(data, size);
 }
 
+bool NVDAAL::executeFwsec(void) {
+    if (!gsp) return false;
+    IOLog("NVDAAL: Executing FWSEC-FRTS...\n");
+    return gsp->executeFwsecFrts();
+}
+
 // Returns: 0=success, 1+=error stage for debugging
 int NVDAAL::loadGspFirmwareEx(const void *data, size_t size) {
     if (!gsp) {

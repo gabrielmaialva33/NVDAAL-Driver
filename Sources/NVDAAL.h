@@ -88,6 +88,7 @@ public:
     bool loadBootloader(const void *data, size_t size);
     bool loadBooterLoad(const void *data, size_t size);    // SEC2 booter firmware
     bool loadVbios(const void *data, size_t size);         // VBIOS for FWSEC
+    bool executeFwsec(void);                               // Execute FWSEC-FRTS to configure WPR2
     uint64_t allocVram(size_t size);
     bool submitCommand(uint32_t cmd);
     bool waitSemaphore(uint64_t gpuAddr, uint32_t value, uint32_t timeoutMs);
