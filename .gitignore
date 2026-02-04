@@ -10,6 +10,13 @@ Tools/nvdaal-cli/nvdaal-cli
 Tools/nvdaal-cli/test_mmu
 Docs/examples/hello_compute
 
+# EFI binaries (keep .efi for distribution)
+# EFI/**/*.efi
+
+# Test binaries
+Tests/check_wpr2
+Tests/test_vbios_parse
+
 # macOS
 .DS_Store
 .AppleDouble

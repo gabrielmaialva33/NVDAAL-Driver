@@ -181,13 +181,6 @@ void NVDAALGsp::freeDmaBuffer(IOBufferMemoryDescriptor **desc) {
 // Firmware Loading
 // ============================================================================
 
-bool NVDAALGsp::loadFirmware(const char *firmwarePath) {
-    // TODO: Load firmware from file
-    // For now, firmware should be loaded externally and passed to loadBootloader
-    IOLog("NVDAAL-GSP: loadFirmware not implemented - use loadBootloader\n");
-    return false;
-}
-
 bool NVDAALGsp::loadBootloader(const void *data, size_t size) {
     if (!initialized) {
         return false;
@@ -765,21 +758,13 @@ bool NVDAALGsp::parseVbios(const void *vbios, size_t size) {
 
     // Step 4b: Pre-Ada fallback - use Token 0x70 (FALCON_DATA)
     if (pmuTableOffset == 0 && falconDataOffset != 0) {
-        IOLog("NVDAAL-GSP: Using pre-Ada Token 0x70 path for PMU table\n");
-
         if (falconDataOffset + sizeof(BitFalconData) > size) {
             IOLog("NVDAAL-GSP: Invalid Falcon Data offset\n");
             return false;
         }
 
         const BitFalconData *falconData = (const BitFalconData *)(data + falconDataOffset);
-        uint32_t pmuTableOffsetRaw = falconData->ucodeTableOffset;
-
-        IOLog("NVDAAL-GSP: PMU Lookup Table raw offset: 0x%x\n", pmuTableOffsetRaw);
-
-        // PMU table offset is relative to image base
-        pmuTableOffset = imageBase + pmuTableOffsetRaw;
-        IOLog("NVDAAL-GSP: PMU Lookup Table absolute: 0x%x (imageBase=0x%x)\n", pmuTableOffset, imageBase);
+        pmuTableOffset = imageBase + falconData->ucodeTableOffset;
 
         if (pmuTableOffset + sizeof(PmuLookupTableHeader) <= size) {
             pmuHdr = (const PmuLookupTableHeader *)(data + pmuTableOffset);
@@ -1828,43 +1813,25 @@ bool NVDAALGsp::executeFwsecFrts(void) {
         return false;
     }
 
-    // ========================================================================
-    // METHOD 1: Try Boot ROM Interface (DMA-based, HS mode)
-    // This is the preferred method as it allows signature verification
-    // ========================================================================
-    IOLog("NVDAAL-GSP: *** METHOD 1: Boot ROM Interface ***\n");
-
+    // Try Boot ROM interface (preferred - allows signature verification)
     if (fwsecInfo.storedSize > 0 && fwsecPhys != 0) {
-        IOLog("NVDAAL-GSP: Trying Boot ROM interface with FWSEC (size=%u)...\n",
-              fwsecInfo.storedSize);
-
+        IOLog("NVDAAL-GSP: Trying Boot ROM interface (size=%u)...\n", fwsecInfo.storedSize);
         if (executeFwsecViaBrom()) {
             IOLog("NVDAAL-GSP: Boot ROM method succeeded!\n");
             return true;
         }
-        IOLog("NVDAAL-GSP: Boot ROM method failed, trying DMA method...\n");
-    } else {
-        IOLog("NVDAAL-GSP: StoredSize not available (0x%x), skipping BROM\n",
-              fwsecInfo.storedSize);
     }
 
-    // ========================================================================
-    // METHOD 2: DMA Loading (Boot ROM can still verify via FBIF)
-    // ========================================================================
-    IOLog("NVDAAL-GSP: *** METHOD 2: DMA Loading ***\n");
-
+    // Try DMA loading
     if (fwsecPhys != 0 && fwsecInfo.storedSize > 0) {
-        // Calculate physical address of FWSEC within VBIOS buffer
         uint64_t fwsecFwPhys = fwsecPhys + fwsecInfo.fwOffset;
-        IOLog("NVDAAL-GSP: Trying DMA-based FWSEC loading at phys 0x%llx...\n", fwsecFwPhys);
+        IOLog("NVDAAL-GSP: Trying DMA loading at phys 0x%llx...\n", fwsecFwPhys);
 
         if (loadFalconUcodeDma(NV_PGSP_BASE, fwsecMem, fwsecFwPhys,
                                fwsecInfo.storedSize, fwsecInfo.bootVec)) {
-            // Wait for completion
             for (int i = 0; i < 1000; i++) {
                 uint32_t cpuctl = readReg(NV_PGSP_FALCON_CPUCTL);
                 if (cpuctl & FALCON_CPUCTL_HALTED) {
-                    IOLog("NVDAAL-GSP: DMA FWSEC halted, checking WPR2...\n");
                     if (checkWpr2Setup()) {
                         IOLog("NVDAAL-GSP: DMA method succeeded!\n");
                         return true;
@@ -1874,14 +1841,10 @@ bool NVDAALGsp::executeFwsecFrts(void) {
                 IODelay(1000);
             }
         }
-        IOLog("NVDAAL-GSP: DMA method failed, trying PIO method...\n");
     }
 
-    // ========================================================================
-    // METHOD 3: PIO Loading (Last resort - will fail HS signature check)
-    // ========================================================================
-    IOLog("NVDAAL-GSP: *** METHOD 3: PIO Loading (last resort) ***\n");
-    IOLog("NVDAAL-GSP: Warning: PIO bypasses Boot ROM, signature won't be verified\n");
+    // PIO Loading (last resort - may fail HS signature check)
+    IOLog("NVDAAL-GSP: Trying PIO loading (last resort)...\n");
 
     // Step 1: Reset GSP Falcon
     IOLog("NVDAAL-GSP: Resetting GSP Falcon for FWSEC...\n");

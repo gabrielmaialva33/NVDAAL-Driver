@@ -65,7 +65,6 @@ public:
     void free(void);
 
     // Firmware loading
-    bool loadFirmware(const char *firmwarePath);
     bool loadBootloader(const void *data, size_t size);
     bool loadBooterLoad(const void *data, size_t size);
     bool loadVbios(const void *data, size_t size);
@@ -182,7 +181,6 @@ private:
     uint32_t readPromData(uint32_t offset); // Read 32-bit value from PROM
     bool locateExpansionRoms(uint32_t *biosSize, uint32_t *expansionRomOffset);
     bool parseVbios(const void *vbios, size_t size);
-    bool loadFwsecFromVbios(void);
 
     // Fuse version and signature helpers (from NVIDIA open-gpu-kernel-modules)
     uint32_t readUcodeFuseVersion(uint8_t ucodeId);  // Read fuse version for ucode
