@@ -1,6 +1,6 @@
-# Makefile para NVDAAL.kext
-# NVIDIA Ada Lovelace Compute Driver para macOS
-# Foco: AI/ML - Sem suporte a display
+# Makefile for NVDAAL.kext
+# NVIDIA Ada Lovelace Compute Driver for macOS
+# Focus: AI/ML - No display support
 
 KEXT_NAME = NVDAAL
 BUNDLE_ID = com.nvdaal.compute
@@ -8,13 +8,13 @@ BUILD_DIR = Build
 KEXT_PATH = $(BUILD_DIR)/$(KEXT_NAME).kext
 INFO_PLIST = Info.plist
 
-# Arquivos fonte
+# Source files
 SOURCES = Sources/NVDAAL.cpp Sources/NVDAALGsp.cpp Sources/NVDAALUserClient.cpp Sources/NVDAALMemory.cpp Sources/NVDAALVASpace.cpp Sources/NVDAALChannel.cpp Sources/NVDAALDisplay.cpp
 
-# Objetos
+# Object files
 OBJECTS = $(BUILD_DIR)/NVDAAL.o $(BUILD_DIR)/NVDAALGsp.o $(BUILD_DIR)/NVDAALUserClient.o $(BUILD_DIR)/NVDAALMemory.o $(BUILD_DIR)/NVDAALVASpace.o $(BUILD_DIR)/NVDAALChannel.o $(BUILD_DIR)/NVDAALDisplay.o
 
-# Compilador e Flags
+# Compiler and Flags
 SDKROOT ?= $(shell xcrun --sdk macosx --show-sdk-path)
 ARCH ?= $(shell uname -m)
 CXX = xcrun -sdk macosx clang++
@@ -32,7 +32,7 @@ LDFLAGS = -arch $(ARCH) -static -Xlinker -kext -nostdlib -lkmod -lcc_kext
 # =============================================================================
 
 all: $(KEXT_PATH) tools lib
-	@echo "[+] Build completo: $(KEXT_PATH), Tools & Library"
+	@echo "[+] Build complete: $(KEXT_PATH), Tools & Library"
 
 lib: $(BUILD_DIR)/libNVDAAL.dylib
 
@@ -92,92 +92,163 @@ $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
 
 # =============================================================================
-# Comandos de desenvolvimento
+# Development Commands
 # =============================================================================
 
 clean:
 	rm -rf $(BUILD_DIR)
-	@echo "[*] Build limpo."
+	@echo "[*] Build cleaned."
 
 rebuild: clean all
 
-# Verificar estrutura do kext
-test: $(KEXT_PATH)
-	@echo "[*] Verificando estrutura do kext..."
+# Verify kext structure
+check-kext: $(KEXT_PATH)
+	@echo "[*] Verifying kext structure..."
 	@ls -la $(KEXT_PATH)/Contents/
 	@ls -la $(KEXT_PATH)/Contents/MacOS/
-	@echo "[*] Validando Info.plist..."
+	@echo "[*] Validating Info.plist..."
 	@plutil $(KEXT_PATH)/Contents/Info.plist
-	@echo "[*] Verificando binário..."
+	@echo "[*] Checking binary..."
 	@file $(KEXT_PATH)/Contents/MacOS/$(KEXT_NAME)
-	@echo "[+] Estrutura OK!"
+	@echo "[+] Structure OK!"
 
 # =============================================================================
-# Instalação e gerenciamento
+# Tests
 # =============================================================================
 
-# Instalar permanentemente (requer reboot)
+TEST_DIR = Tests
+
+# Compile all tests
+test: test-structures test-vbios-real test-library test-driver
+	@echo "[+] All tests compiled!"
+	@echo "[*] To run: make run-tests"
+
+# Run all tests
+run-tests: test
+	@echo "\n=========================================="
+	@echo "  NVDAAL Test Suite"
+	@echo "=========================================="
+	@echo "\n[1/4] Structure tests..."
+	@./$(BUILD_DIR)/test_structures || true
+	@echo "\n[2/4] VBIOS real tests..."
+	@./$(BUILD_DIR)/test_vbios_real || true
+	@echo "\n[3/4] Library tests..."
+	@./$(BUILD_DIR)/test_library || true
+	@echo "\n[4/4] Driver tests..."
+	@./$(BUILD_DIR)/test_driver || true
+	@echo "\n=========================================="
+	@echo "  Tests completed!"
+	@echo "=========================================="
+
+# Structure tests (no hardware required)
+test-structures: $(BUILD_DIR)/test_structures
+$(BUILD_DIR)/test_structures: $(TEST_DIR)/test_structures.c $(TEST_DIR)/nvdaal_test.h Sources/NVDAALRegs.h
+	@mkdir -p $(BUILD_DIR)
+	clang -std=c11 -Wall -Wextra -I$(TEST_DIR) -I./Sources -o $@ $(TEST_DIR)/test_structures.c
+	@echo "[*] Compiled: $@"
+
+# VBIOS real tests (requires Firmware/AD102.rom)
+test-vbios-real: $(BUILD_DIR)/test_vbios_real
+$(BUILD_DIR)/test_vbios_real: $(TEST_DIR)/test_vbios_real.c $(TEST_DIR)/nvdaal_test.h Sources/NVDAALRegs.h
+	@mkdir -p $(BUILD_DIR)
+	clang -std=c11 -Wall -Wextra -I$(TEST_DIR) -I./Sources -o $@ $(TEST_DIR)/test_vbios_real.c
+	@echo "[*] Compiled: $@"
+
+# Library tests (requires Build/libNVDAAL.dylib)
+test-library: lib $(BUILD_DIR)/test_library
+$(BUILD_DIR)/test_library: $(TEST_DIR)/test_library.c $(TEST_DIR)/nvdaal_test.h
+	@mkdir -p $(BUILD_DIR)
+	clang -std=c11 -Wall -Wextra -I$(TEST_DIR) -o $@ $(TEST_DIR)/test_library.c
+	@echo "[*] Compiled: $@"
+
+# Driver tests (requires kext loaded)
+test-driver: $(BUILD_DIR)/test_driver
+$(BUILD_DIR)/test_driver: $(TEST_DIR)/test_driver.c $(TEST_DIR)/nvdaal_test.h
+	@mkdir -p $(BUILD_DIR)
+	clang -std=c11 -Wall -Wextra -I$(TEST_DIR) -framework IOKit -framework CoreFoundation \
+		-o $@ $(TEST_DIR)/test_driver.c
+	@echo "[*] Compiled: $@"
+
+# Quick test (structures only - no hardware required)
+test-quick: test-structures
+	@./$(BUILD_DIR)/test_structures
+
+# Test specific VBIOS
+test-vbios: test-vbios-real
+	@./$(BUILD_DIR)/test_vbios_real Firmware/AD102.rom
+
+# Clean tests
+clean-tests:
+	rm -f $(BUILD_DIR)/test_*
+	@echo "[*] Tests cleaned."
+
+# =============================================================================
+# Installation and Management
+# =============================================================================
+
+# Install permanently (requires reboot)
 install: $(KEXT_PATH)
-	@echo "[*] Instalando NVDAAL.kext..."
+	@echo "[*] Installing NVDAAL.kext..."
 	sudo chown -R root:wheel $(KEXT_PATH)
 	sudo cp -R $(KEXT_PATH) /Library/Extensions/
 	sudo touch /Library/Extensions/
 	sudo kextcache -invalidate /
-	@echo "[+] Kext instalado. Reboot necessário."
-	@echo "[!] Certifique-se de ter boot-args: kext-dev-mode=1"
+	@echo "[+] Kext installed. Reboot required."
+	@echo "[!] Make sure you have boot-args: kext-dev-mode=1"
 
-# Carregar temporariamente (para testes)
+# Load temporarily (for testing)
 load: $(KEXT_PATH)
-	@echo "[*] Carregando NVDAAL.kext..."
+	@echo "[*] Loading NVDAAL.kext..."
 	sudo chown -R root:wheel $(KEXT_PATH)
 	sudo kextload $(KEXT_PATH)
-	@echo "[+] Kext carregado."
-	@echo "[*] Verificar logs: make logs"
+	@echo "[+] Kext loaded."
+	@echo "[*] Check logs: make logs"
 
-# Descarregar
+# Unload
 unload:
-	@echo "[*] Descarregando NVDAAL.kext..."
+	@echo "[*] Unloading NVDAAL.kext..."
 	-sudo kextunload -b $(BUNDLE_ID)
-	@echo "[+] Kext descarregado."
+	@echo "[+] Kext unloaded."
 
-# Reinstalar (unload + install)
+# Reinstall (unload + install)
 reinstall: unload clean all install
 
 # =============================================================================
-# Debug e logs
+# Debug and Logs
 # =============================================================================
 
-# Ver logs do driver
+# View driver logs
 logs:
-	@echo "[*] Logs do NVDAAL (últimos 5 minutos):"
+	@echo "[*] NVDAAL logs (last 5 minutes):"
 	log show --predicate 'eventMessage contains "NVDAAL"' --last 5m
 
-# Ver logs em tempo real
+# View logs in real-time
 logs-live:
-	@echo "[*] Logs do NVDAAL (tempo real - Ctrl+C para sair):"
+	@echo "[*] NVDAAL logs (real-time - Ctrl+C to exit):"
 	log stream --predicate 'eventMessage contains "NVDAAL"'
 
-# Status do kext
+# Kext status
 status:
-	@echo "[*] Status do NVDAAL:"
-	@kextstat | grep -i nvdaal || echo "Kext não carregado"
+	@echo "[*] NVDAAL Status:"
+	@kextstat | grep -i nvdaal || echo "Kext not loaded"
 	@echo ""
-	@echo "[*] Dispositivos PCI NVIDIA:"
-	@ioreg -l | grep -i \"class IOPCIDevice\" -A 20 | grep -i nvidia || echo "Nenhum encontrado"
+	@echo "[*] NVIDIA PCI Devices:"
+	@ioreg -l | grep -i \"class IOPCIDevice\" -A 20 | grep -i nvidia || echo "None found"
 
 # =============================================================================
 # Firmware
 # =============================================================================
 
-# Baixar firmware GSP
+# Download GSP firmware
 download-firmware:
-	@echo "[*] Baixando firmware GSP..."
+	@echo "[*] Downloading GSP firmware..."
 	@mkdir -p Firmware
 	curl -L -o Firmware/gsp-570.144.bin \
 		"https://github.com/NVIDIA/linux-firmware/raw/nvidia-staging/nvidia/ad102/gsp/gsp-570.144.bin" || \
 	curl -L -o Firmware/gsp-570.144.bin \
 		"https://github.com/NVIDIA/linux-firmware/raw/refs/heads/nvidia-staging/nvidia/ga102/gsp/gsp-570.144.bin"
 	@ls -la Firmware/gsp-570.144.bin
-	@echo "[+] Firmware baixado."
+	@echo "[+] Firmware downloaded."
 
-.PHONY: all clean rebuild test install load unload reinstall logs logs-live status download-firmware
+.PHONY: all clean rebuild test test-quick test-vbios test-structures test-vbios-real test-library test-driver \
+       run-tests clean-tests check-kext install load unload reinstall logs logs-live status download-firmware
