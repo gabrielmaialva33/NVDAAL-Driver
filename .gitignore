@@ -36,6 +36,7 @@ Firmware/*.rom
 *.swo
 *~
 \#*\#
+tmp
 
 # Python
 __pycache__/

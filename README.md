@@ -11,15 +11,19 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/license/gabrielmaialva33/NVDAAL-Driver?color=00b8d3&style=flat&logo=appveyor" alt="License" />
+  <a href="https://github.com/gabrielmaialva33/NVDAAL-Driver/actions/workflows/build.yml">
+    <img src="https://github.com/gabrielmaialva33/NVDAAL-Driver/actions/workflows/build.yml/badge.svg" alt="CI" />
+  </a>
+  <img src="https://img.shields.io/github/license/gabrielmaialva33/NVDAAL-Driver?color=00b8d3&style=flat" alt="License" />
   <img src="https://img.shields.io/badge/C++-IOKit-00599C?style=flat&logo=cplusplus" alt="Language" />
   <img src="https://img.shields.io/badge/macOS-Tahoe%2026+-000?style=flat&logo=apple" alt="Platform" />
   <img src="https://img.shields.io/badge/NVIDIA-RTX%2040%20Series-76B900?style=flat&logo=nvidia" alt="GPU" />
-  <img src="https://img.shields.io/github/repo-size/gabrielmaialva33/NVDAAL-Driver?style=flat&logo=appveyor" alt="Repo Size" />
-  <a href="https://github.com/gabrielmaialva33/NVDAAL-Driver/commits/master">
-    <img src="https://img.shields.io/github/last-commit/gabrielmaialva33/NVDAAL-Driver?style=flat&logo=appveyor" alt="Last Commit" />
+  <a href="https://github.com/gabrielmaialva33/NVDAAL-Driver/releases">
+    <img src="https://img.shields.io/github/v/release/gabrielmaialva33/NVDAAL-Driver?include_prereleases" alt="Release" />
   </a>
-  <img src="https://img.shields.io/badge/made%20by-Maia-15c3d6?style=flat&logo=appveyor" alt="Made by Maia" />
+  <a href="https://github.com/gabrielmaialva33/NVDAAL-Driver/commits/master">
+    <img src="https://img.shields.io/github/last-commit/gabrielmaialva33/NVDAAL-Driver?style=flat" alt="Last Commit" />
+  </a>
 </p>
 
 <br>
@@ -80,6 +84,22 @@ This project is **experimental** and in early development. It requires:
 
 ### :arrow_down: Installation
 
+#### Option 1: Download Pre-built Release
+
+```bash
+# Download latest release from GitHub Releases
+curl -LO https://github.com/gabrielmaialva33/NVDAAL-Driver/releases/latest/download/NVDAAL-Release-x86_64.zip
+
+# Extract
+unzip NVDAAL-Release-x86_64.zip
+
+# Install kext
+sudo cp -R NVDAAL.kext /Library/Extensions/
+sudo kextutil /Library/Extensions/NVDAAL.kext
+```
+
+#### Option 2: Build from Source
+
 ```bash
 # Clone the repository
 git clone https://github.com/gabrielmaialva33/NVDAAL-Driver.git
@@ -130,7 +150,7 @@ sudo reboot
 
 ## :wrench: Features
 
-### Current (v0.6.0 - FWSEC Execution API & Ada Lovelace Parsing)
+### Current (v0.6.1-dev - RSA Signature Patching & WPR2 Configuration)
 - :white_check_mark: PCI device detection and enumeration
 - :white_check_mark: BAR0/BAR1 memory mapping (MMIO + VRAM)
 - :white_check_mark: Chip identification (Ada Lovelace architecture)
@@ -145,8 +165,12 @@ sudo reboot
     - BIT (BIOS Information Table) header scanning
     - Ada Lovelace Token 0x50 PMU table path (with Token 0x70 fallback)
     - PMU Lookup Table & Falcon Ucode Descriptor extraction
-  - **Real FWSEC-FRTS Execution**:
+    - **FalconUcodeDescV3Nvidia parsing** (pkcDataOffset, signatureCount, signatureVersions)
+  - **Real FWSEC-FRTS Execution** (matching NVIDIA open-gpu-kernel-modules):
     - Falcon IMEM/DMEM ucode loading
+    - **Fuse version reading** (`readUcodeFuseVersion()`)
+    - **RSA-3K signature patching** (`patchFwsecSignature()`)
+    - **FRTS command buffer patching** (`patchFrtsCmdBuffer()`)
     - DMEMMAPPER interface patching (FRTS command 0x15)
     - GSP Falcon boot with timeout monitoring
   - **Enhanced Boot Sequence**:
@@ -183,15 +207,17 @@ sudo reboot
   - x86_64 (Intel)
 
 ### In Development
+- :construction: **WPR2 Configuration** (FWSEC-FRTS with proper signature patching)
 - :construction: Compute Class (ADA_COMPUTE_A) Context
 - :construction: Semaphore Synchronization
 
 ### Planned
 - :hourglass: tinygrad/PyTorch integration
+- :hourglass: CUDA-like compute API
 
 ## :star: Pioneer Insights
 
-As of v0.6.0, **NVDAAL** is one of the first open-source efforts to bring Ada Lovelace compute to macOS. Key architectural decisions made for excellence:
+As of v0.6.1, **NVDAAL** is one of the first open-source efforts to bring Ada Lovelace compute to macOS. Key architectural decisions made for excellence:
 
 - **Lock-Free GSP RPC**: Using synchronous memory barriers and stack-allocated buffers to minimize kernel latency during GPU resource management.
 - **Hardware-Native GPFIFO**: Fully compliant with the 128-bit entry format required by AD10x chips, enabling direct hardware work submission.
@@ -252,7 +278,7 @@ graph TB
     MEM -->|BAR1 Mapping| VRAM
 ```
 
-### GSP Boot Sequence (v0.4.0)
+### GSP Boot Sequence
 
 ```mermaid
 sequenceDiagram
