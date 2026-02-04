@@ -14,6 +14,20 @@
 #include "NVDAALRegs.h"
 #include "NVDAALUserClient.h"
 #include "NVDAAL.h"
+#include "NVDAALVersion.h"
+#include "NVDAALDebug.h"
+#include "NVDAALConfig.h"
+
+// =============================================================================
+// Global State (Lilu-style)
+// =============================================================================
+
+// Debug logging globals (used by NVDAALDebug.h macros)
+NVDAALLogLevel nvdaalLogLevel = NVDAAL_LOG_INFO;
+bool nvdaalDebugEnabled = false;
+
+// Configuration globals (used by NVDAALConfig.h)
+NVDAALConfiguration nvdaalConfig;
 
 // Required for modern macOS kext loading (kmutil/AuxKC)
 extern "C" {
@@ -38,6 +52,17 @@ bool NVDAAL::init(OSDictionary *dictionary) {
         return false;
     }
 
+    // Initialize configuration from boot-args (Lilu-style)
+    nvdaalConfigInit();
+
+    // Check if we should load
+    if (!nvdaalShouldLoad()) {
+        return false;
+    }
+
+    // Print banner
+    IOLog(NVDAAL_BANNER);
+
     pciDevice = nullptr;
     bar0Map = nullptr;
     bar1Map = nullptr;
@@ -55,16 +80,21 @@ bool NVDAAL::init(OSDictionary *dictionary) {
     channel = nullptr;
     display = nullptr;
     computeReady = false;
-    
+
     hClient = 0;
     hDevice = 0;
 
-    IOLog("NVDAAL: Compute driver initialized\n");
+    // Log configuration in debug mode
+    if (NVDAAL_DEBUG_ENABLED) {
+        nvdaalConfigLog();
+    }
+
+    NVDLOG("init", "Compute driver initialized");
     return true;
 }
 
 void NVDAAL::free(void) {
-    IOLog("NVDAAL: Driver freed\n");
+    NVDLOG("free", "Driver freed");
     
     if (interruptSource) {
         interruptSource->disable();
@@ -87,28 +117,19 @@ IOService *NVDAAL::probe(IOService *provider, SInt32 *score) {
     UInt16 vendorID = vendorDevice & 0xFFFF;
     UInt16 devID = (vendorDevice >> 16) & 0xFFFF;
 
-    if (vendorID != 0x10DE) {
-        IOLog("NVDAAL: Not NVIDIA (vendor 0x%04x)\n", vendorID);
+    if (vendorID != NVIDIA_VENDOR_ID) {
+        NVDDBG("probe", "Not NVIDIA (vendor 0x%04x)", vendorID);
         return nullptr;
     }
 
-    // Supported Ada Lovelace devices
-    const char *deviceName = nullptr;
-    switch (devID) {
-        case 0x2684: deviceName = "RTX 4090"; break;
-        case 0x2685: deviceName = "RTX 4090 D"; break;
-        case 0x2702: deviceName = "RTX 4080 Super"; break;
-        case 0x2704: deviceName = "RTX 4080"; break;
-        case 0x2705: deviceName = "RTX 4070 Ti Super"; break;
-        case 0x2782: deviceName = "RTX 4070 Ti"; break;
-        case 0x2786: deviceName = "RTX 4070"; break;
-        case 0x2860: deviceName = "RTX 4070 Super"; break;
-        default:
-            IOLog("NVDAAL: Unsupported device 0x%04x\n", devID);
-            return nullptr;
+    // Check if device is supported (using NVDAALVersion.h)
+    if (!nvdaalIsDeviceSupported(devID)) {
+        NVDWARN("probe", "Unsupported device 0x%04x", devID);
+        return nullptr;
     }
 
-    IOLog("NVDAAL: Found %s (0x%04x) - Compute Mode\n", deviceName, devID);
+    const char *deviceName = nvdaalGetDeviceName(devID);
+    NVDLOG("probe", "Found %s (0x%04x) - Compute Mode", deviceName, devID);
     deviceId = devID;
 
     *score = 5000;  // High score to override Apple's stub drivers
@@ -122,27 +143,29 @@ bool NVDAAL::start(IOService *provider) {
 
     pciDevice = OSDynamicCast(IOPCIDevice, provider);
     if (!pciDevice) {
-        IOLog("NVDAAL: Failed to get PCI device\n");
+        NVDERR("start", "Failed to get PCI device");
         return false;
     }
 
-    IOLog("NVDAAL: ========================================\n");
-    IOLog("NVDAAL: Starting RTX 4090 Compute Driver\n");
-    IOLog("NVDAAL: ========================================\n");
+    NVDLOG("start", "========================================");
+    NVDLOG("start", "Starting %s Compute Driver", nvdaalGetDeviceName(deviceId));
+    NVDLOG("start", "========================================");
 
     // Enable PCI device
     pciDevice->setBusLeadEnable(true);
     pciDevice->setMemoryEnable(true);
 
     // Map BARs
+    NVDTIMED_START(mapBARs);
     if (!mapBARs()) {
-        IOLog("NVDAAL: Failed to map BARs\n");
+        NVDERR("start", "Failed to map BARs");
         return false;
     }
+    NVDTIMED_END("start", mapBARs, "mapBARs()");
 
     // Identify chip
     if (!identifyChip()) {
-        IOLog("NVDAAL: Failed to identify chip\n");
+        NVDERR("start", "Failed to identify chip");
         unmapBARs();
         return false;
     }
