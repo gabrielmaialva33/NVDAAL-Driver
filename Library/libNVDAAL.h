@@ -50,6 +50,9 @@ public:
     bool loadVbios(const std::string& path);       // VBIOS for FWSEC
     bool loadVbios(const void* data, size_t size);
 
+    // FWSEC execution
+    bool executeFwsec();  // Execute FWSEC-FRTS to configure WPR2
+
     // Memory Management
     uint64_t allocVram(size_t size);
     bool submitCommand(uint32_t cmd);

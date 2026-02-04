@@ -18,6 +18,7 @@
 #define METHOD_LOAD_VBIOS 5
 #define METHOD_LOAD_BOOTLOADER 6
 #define METHOD_GET_STATUS 7
+#define METHOD_EXECUTE_FWSEC 8
 
 namespace nvdaal {
 
@@ -256,22 +257,54 @@ bool Client::loadVbios(const void* data, size_t size) {
     return (kr == KERN_SUCCESS);
 }
 
+bool Client::executeFwsec() {
+    if (!connect()) return false;
+
+    uint64_t output[1] = {0};
+    uint32_t outputCount = 1;
+
+    kern_return_t kr = IOConnectCallScalarMethod(
+        (io_connect_t)connection,
+        METHOD_EXECUTE_FWSEC,
+        NULL, 0,           // No input
+        output, &outputCount
+    );
+
+    if (kr != KERN_SUCCESS) {
+        std::cerr << "[libNVDAAL] executeFwsec failed: 0x" << std::hex << kr << std::dec << std::endl;
+        return false;
+    }
+
+    return (output[0] == 1);
+}
+
 bool Client::getStatus(GpuStatus *status) {
     if (!connect() || !status) return false;
 
-    size_t outputSize = sizeof(GpuStatus);
+    uint64_t output[9] = {0};
+    uint32_t outputCount = 9;
 
-    kern_return_t kr = IOConnectCallStructMethod(
+    kern_return_t kr = IOConnectCallScalarMethod(
         (io_connect_t)connection,
         METHOD_GET_STATUS,
-        NULL, 0,                      // No input
-        status, &outputSize           // Output: GpuStatus struct
+        NULL, 0,           // No input
+        output, &outputCount
     );
 
     if (kr != KERN_SUCCESS) {
         std::cerr << "[libNVDAAL] getStatus failed: 0x" << std::hex << kr << std::dec << std::endl;
         return false;
     }
+
+    status->pmcBoot0 = (uint32_t)output[0];
+    status->wpr2Lo = (uint32_t)output[1];
+    status->wpr2Hi = (uint32_t)output[2];
+    status->wpr2Enabled = (output[3] != 0);
+    status->gspRiscvCpuctl = (uint32_t)output[4];
+    status->sec2RiscvCpuctl = (uint32_t)output[5];
+    status->gspFalconMailbox0 = (uint32_t)output[6];
+    status->gspFalconMailbox1 = (uint32_t)output[7];
+    status->bootScratch = (uint32_t)output[8];
 
     return true;
 }
