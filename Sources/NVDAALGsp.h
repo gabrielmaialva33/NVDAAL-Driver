@@ -98,6 +98,9 @@ public:
     // FWSEC execution (public for UserClient access)
     bool executeFwsecFrts(void);
 
+    // Debug accessors
+    bool isFwsecValid(void) const { return fwsecInfo.valid; }
+
 private:
     uint32_t lastHandle; // Simple handle generator
 
@@ -142,6 +145,12 @@ private:
     uint64_t wpr2Lo;
     uint64_t wpr2Hi;
 
+    // VBIOS storage
+    IOBufferMemoryDescriptor *vbiosMem;     // VBIOS read from PROM
+    uint64_t vbiosPhys;
+    uint32_t vbiosSize;
+    uint32_t expansionRomOffset;            // Offset adjustment for FWSEC parsing
+
     // FWSEC info (extracted from VBIOS)
     FwsecInfo fwsecInfo;
     uint32_t fwsecImageOffset;  // Offset of FWSEC image in VBIOS
@@ -164,15 +173,21 @@ private:
 
     bool resetFalcon(void);
     bool resetSec2(void);
-    bool executeBootloader(void);
-    bool executeFwsecSb(void);
     bool executeBooterLoad(void);
     bool startRiscv(void);
 
     // VBIOS / FWSEC helpers
-    bool readVbiosFromBar(void);  // Read VBIOS directly from BAR0 @ 0x300000
+    bool readVbiosFromBar(void);  // Read VBIOS directly from BAR0 @ 0x300000 (legacy)
+    bool readVbiosFromProm(void); // Read VBIOS from PROM registers (after POST, unencrypted)
+    uint32_t readPromData(uint32_t offset); // Read 32-bit value from PROM
+    bool locateExpansionRoms(uint32_t *biosSize, uint32_t *expansionRomOffset);
     bool parseVbios(const void *vbios, size_t size);
     bool loadFwsecFromVbios(void);
+
+    // Fuse version and signature helpers (from NVIDIA open-gpu-kernel-modules)
+    uint32_t readUcodeFuseVersion(uint8_t ucodeId);  // Read fuse version for ucode
+    bool patchFwsecSignature(uint8_t *dmem, size_t dmemSize);  // Patch RSA signature
+    bool patchFrtsCmdBuffer(uint8_t *dmem, size_t dmemSize, uint64_t frtsOffset);  // Patch FRTS cmd
     bool loadFalconUcode(uint32_t falconBase, const void *imem, size_t imemSize,
                          const void *dmem, size_t dmemSize);
 

@@ -29,6 +29,10 @@ NVDAALGsp::NVDAALGsp(void) {
     wprMetaMem = nullptr;
     radix3Mem = nullptr;
     fwsecMem = nullptr;
+    vbiosMem = nullptr;
+    vbiosPhys = 0;
+    vbiosSize = 0;
+    expansionRomOffset = 0;
 
     cmdQueue = nullptr;
     statQueue = nullptr;
@@ -119,6 +123,7 @@ void NVDAALGsp::free(void) {
     freeDmaBuffer(&radix3Mem);
     freeDmaBuffer(&wprMetaMem);
     freeDmaBuffer(&fwsecMem);
+    freeDmaBuffer(&vbiosMem);
     freeDmaBuffer(&booterLoadMem);
     freeDmaBuffer(&bootloaderMem);
     freeDmaBuffer(&firmwareMem);
@@ -368,6 +373,212 @@ bool NVDAALGsp::readVbiosFromBar(void) {
     }
 
     return imageCount > 0;
+}
+
+// ============================================================================
+// PROM Reading - Read VBIOS directly from GPU PROM registers (after POST)
+// This method reads VBIOS from BAR0 + 0x180000 (NV_PROM_DATA)
+// After GPU POST, the FWSEC firmware is available unencrypted here
+// ============================================================================
+
+uint32_t NVDAALGsp::readPromData(uint32_t offset) {
+    // Read 32-bit value from PROM space
+    // NV_PROM_DATA(offset) = BAR0 + 0x180000 + offset
+    return readReg(NV_PROM_DATA(offset));
+}
+
+bool NVDAALGsp::locateExpansionRoms(uint32_t *biosSize, uint32_t *expRomOffset) {
+    // Locate expansion ROMs in PROM and calculate expansionRomOffset
+    // This offset is needed to properly parse FWSEC from BIT Token 0x70
+
+    uint32_t currBlock = 0;  // Start at beginning of PROM
+    uint32_t extRomOffset = 0;
+    uint32_t baseRomSize = 0;
+    uint32_t lastOffset = 0;
+    uint32_t lastSize = 0;
+
+    IOLog("NVDAAL-GSP: Scanning PROM for expansion ROMs...\n");
+
+    // Find all ROMs by following PCIR structures
+    for (int i = 0; i < 16; i++) {  // Max 16 images
+        // Read ROM signature
+        uint16_t romSig = (uint16_t)readPromData(currBlock);
+        if (romSig != PCI_ROM_SIGNATURE) {
+            if (i == 0) {
+                IOLog("NVDAAL-GSP: No valid ROM signature at PROM start\n");
+                return false;
+            }
+            break;
+        }
+
+        // Get PCIR offset
+        uint16_t pcirOffset = (uint16_t)readPromData(currBlock + PCI_ROM_PCIR_OFFSET);
+        uint32_t pcirAddr = currBlock + pcirOffset;
+
+        // Verify PCIR signature
+        uint32_t pcirSig = readPromData(pcirAddr);
+        if (pcirSig != PCIR_SIGNATURE) {
+            IOLog("NVDAAL-GSP: Invalid PCIR signature at 0x%x: 0x%08x\n", pcirAddr, pcirSig);
+            break;
+        }
+
+        // Read image length (in 512-byte units) and code type
+        uint16_t imageLen = (uint16_t)(readPromData(pcirAddr + PCIR_IMAGE_LEN_OFFSET) & 0xFFFF);
+        uint8_t codeType = (uint8_t)(readPromData(pcirAddr + PCIR_CODE_TYPE_OFFSET) & 0xFF);
+        uint8_t indicator = (uint8_t)((readPromData(pcirAddr + PCIR_CODE_TYPE_OFFSET) >> 8) & 0xFF);
+
+        uint32_t imageSize = imageLen * PCI_ROM_IMAGE_BLOCK_SIZE;
+
+        IOLog("NVDAAL-GSP: PROM Image %d @ 0x%x: type=0x%02x, size=%u bytes%s\n",
+              i, currBlock, codeType, imageSize,
+              (indicator & PCIR_LAST_IMAGE_FLAG) ? " (LAST)" : "");
+
+        // Track FWSEC extension ROM offset (type 0xE0)
+        if (extRomOffset == 0 && codeType == NV_VBIOS_CODE_TYPE_FWSEC) {
+            extRomOffset = currBlock;
+            IOLog("NVDAAL-GSP: Found FWSEC extension ROM at offset 0x%x\n", extRomOffset);
+        }
+
+        // Track base ROM size (type 0x00)
+        if (baseRomSize == 0 && codeType == NV_VBIOS_CODE_TYPE_PCIAT) {
+            baseRomSize = imageSize;
+        }
+
+        lastOffset = currBlock;
+        lastSize = imageSize;
+
+        // Check if last image
+        if (indicator & PCIR_LAST_IMAGE_FLAG) {
+            break;
+        }
+
+        // Move to next image
+        currBlock += imageSize;
+    }
+
+    // Return total BIOS size
+    if (biosSize) {
+        *biosSize = lastOffset + lastSize;
+    }
+
+    // Calculate expansionRomOffset as Linux driver does:
+    // expansionRomOffset = extRomOffset - baseRomSize (when both are non-zero)
+    if (expRomOffset) {
+        if (extRomOffset > 0 && baseRomSize > 0) {
+            *expRomOffset = extRomOffset - baseRomSize;
+            IOLog("NVDAAL-GSP: Calculated expansionRomOffset = 0x%x\n", *expRomOffset);
+        } else {
+            *expRomOffset = 0;
+        }
+    }
+
+    return true;
+}
+
+bool NVDAALGsp::readVbiosFromProm(void) {
+    IOLog("NVDAAL-GSP: Reading VBIOS from PROM (BAR0 + 0x%x)...\n", NV_PROM_BASE);
+
+    // ========================================================================
+    // Timing verification (per HuggingChat/NVIDIA documentation):
+    // 1. Verify GPU has completed POST via NV_PMC_ENABLE
+    // 2. Check BAR0 is active via NV_PBUS_PCI_NV_19
+    // 3. Wait 50-100ms after GPU readiness
+    // 4. Retry with backoff if PROM returns all-FFs
+    // ========================================================================
+
+    // Step 1: Check POST completion - NV_PMC_ENABLE should have engine bits set
+    uint32_t pmcEnable = readReg(NV_PMC_ENABLE);
+    IOLog("NVDAAL-GSP: NV_PMC_ENABLE = 0x%08x\n", pmcEnable);
+    if (pmcEnable == 0 || pmcEnable == 0xFFFFFFFF) {
+        IOLog("NVDAAL-GSP: GPU may not have completed POST (PMC_ENABLE=0x%08x)\n", pmcEnable);
+        // Continue anyway - macOS might handle POST differently
+    }
+
+    // Step 2: Check BAR0 state
+    uint32_t pciNv19 = readReg(NV_PBUS_PCI_NV_19);
+    IOLog("NVDAAL-GSP: NV_PBUS_PCI_NV_19 = 0x%08x\n", pciNv19);
+
+    // Step 3: Wait for GPU to be ready (50-100ms recommended)
+    IOLog("NVDAAL-GSP: Waiting 100ms for GPU PROM readiness...\n");
+    IOSleep(100);
+
+    // Step 4: First read to check if PROM is accessible (with retry)
+    uint32_t testRead = readPromData(0);
+    int retryCount = 0;
+    const int maxRetries = 5;
+
+    while (testRead == 0xFFFFFFFF && retryCount < maxRetries) {
+        IOLog("NVDAAL-GSP: PROM returned 0xFFFFFFFF, retry %d/%d with backoff...\n",
+              retryCount + 1, maxRetries);
+        IOSleep(50 * (retryCount + 1));  // Exponential backoff: 50, 100, 150, 200, 250ms
+        testRead = readPromData(0);
+        retryCount++;
+    }
+
+    if (testRead == 0xFFFFFFFF) {
+        IOLog("NVDAAL-GSP: PROM still returning 0xFFFFFFFF after %d retries - access premature?\n", maxRetries);
+        // Continue anyway - let locateExpansionRoms handle validation
+    } else {
+        IOLog("NVDAAL-GSP: PROM accessible, first word = 0x%08x\n", testRead);
+    }
+
+    // First, locate expansion ROMs to determine BIOS size and expansion ROM offset
+    uint32_t biosSize = 0;
+    if (!locateExpansionRoms(&biosSize, &expansionRomOffset)) {
+        IOLog("NVDAAL-GSP: Failed to locate expansion ROMs in PROM\n");
+        return false;
+    }
+
+    if (biosSize == 0 || biosSize > NV_VBIOS_MAX_SIZE) {
+        IOLog("NVDAAL-GSP: Invalid BIOS size from PROM: %u\n", biosSize);
+        return false;
+    }
+
+    IOLog("NVDAAL-GSP: VBIOS size from PROM: %u bytes, expansionRomOffset: 0x%x\n",
+          biosSize, expansionRomOffset);
+
+    // Allocate buffer for VBIOS
+    if (!allocDmaBuffer(&vbiosMem, biosSize, &vbiosPhys)) {
+        IOLog("NVDAAL-GSP: Failed to allocate VBIOS buffer\n");
+        return false;
+    }
+
+    uint8_t *vbiosData = (uint8_t *)vbiosMem->getBytesNoCopy();
+    vbiosSize = biosSize;
+
+    // Read VBIOS from PROM using 32-bit aligned reads
+    IOLog("NVDAAL-GSP: Copying VBIOS from PROM...\n");
+    uint32_t alignedSize = (biosSize + 3) & ~3;  // Align to 4 bytes
+
+    for (uint32_t i = 0; i < alignedSize; i += 4) {
+        uint32_t val = readPromData(i);
+        if (i + 4 <= biosSize) {
+            *((uint32_t *)(vbiosData + i)) = val;
+        } else {
+            // Handle last partial word
+            for (uint32_t j = i; j < biosSize; j++) {
+                vbiosData[j] = (uint8_t)(val >> ((j - i) * 8));
+            }
+        }
+    }
+
+    // Verify we got valid data
+    if (vbiosData[0] != 0x55 || vbiosData[1] != 0xAA) {
+        IOLog("NVDAAL-GSP: WARNING: PROM data doesn't have valid ROM signature (got 0x%02x%02x)\n",
+              vbiosData[0], vbiosData[1]);
+        // Continue anyway - some VBIOSes have different header formats
+    } else {
+        IOLog("NVDAAL-GSP: VBIOS ROM signature verified (0x55AA)\n");
+    }
+
+    // Log first few bytes for debugging
+    IOLog("NVDAAL-GSP: PROM data: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+          vbiosData[0], vbiosData[1], vbiosData[2], vbiosData[3],
+          vbiosData[4], vbiosData[5], vbiosData[6], vbiosData[7]);
+
+    IOLog("NVDAAL-GSP: VBIOS read from PROM complete (%u bytes)\n", vbiosSize);
+
+    return true;
 }
 
 // ============================================================================
@@ -621,32 +832,37 @@ bool NVDAALGsp::parseVbios(const void *vbios, size_t size) {
     
     uint32_t entryOffset = pmuTableOffset + pmuHdr->headerSize;
 
-    // Detect Ada Lovelace format: headerSize=6, entrySize=6 (signature: 01 06 06)
-    bool isAdaFormat = (pmuHdr->headerSize == 6 && pmuHdr->entrySize == 6);
-    IOLog("NVDAAL-GSP: PMU entry format: %s\n", isAdaFormat ? "Ada (6-byte)" : "Pre-Ada");
+    // 6-byte entries can be EITHER format - check both!
+    // Pre-Ada: appId(1) + targetId(1) + offset(4) = 6 bytes
+    // Ada: appId(2) + offset(4) = 6 bytes
+    // We'll try pre-Ada format first (1-byte appId) since this VBIOS uses it
+    IOLog("NVDAAL-GSP: PMU entrySize=%d - checking both entry formats\n", pmuHdr->entrySize);
 
     for (int i = 0; i < pmuHdr->entryCount && entryOffset < size - pmuHdr->entrySize; i++) {
-        uint16_t appId;
-        uint32_t dataOffset;
+        // Always parse as pre-Ada format first (1-byte appId)
+        const PmuLookupEntry *entry = (const PmuLookupEntry *)(data + entryOffset);
+        uint8_t appId8 = entry->appId;
+        uint32_t dataOffset = entry->dataOffset;
 
-        if (isAdaFormat) {
-            // Ada Lovelace: 2-byte appId (LE) + 4-byte offset
-            const PmuLookupEntryAda *entry = (const PmuLookupEntryAda *)(data + entryOffset);
-            appId = entry->appId;
-            dataOffset = entry->dataOffset;
-            IOLog("NVDAAL-GSP: PMU Entry %d (Ada): appId=0x%04x, dataOff=0x%x\n",
-                  i, appId, dataOffset);
-        } else {
-            // Pre-Ada: 1-byte appId + 1-byte targetId + 4-byte offset
-            const PmuLookupEntry *entry = (const PmuLookupEntry *)(data + entryOffset);
-            appId = entry->appId;
-            dataOffset = entry->dataOffset;
-            IOLog("NVDAAL-GSP: PMU Entry %d: appId=0x%02x, targetId=0x%02x, dataOff=0x%x\n",
-                  i, entry->appId, entry->targetId, dataOffset);
+        IOLog("NVDAAL-GSP: PMU Entry %d: appId=0x%02x, targetId=0x%02x, dataOff=0x%x\n",
+              i, appId8, entry->targetId, dataOffset);
+
+        // Check pre-Ada format (1-byte appId = 0x85)
+        bool foundFwsec = (appId8 == FWSEC_APP_ID_FWSEC || appId8 == 0x01);
+
+        // Also check Ada format (2-byte appId = 0x0085)
+        if (!foundFwsec && pmuHdr->entrySize == 6) {
+            const PmuLookupEntryAda *entryAda = (const PmuLookupEntryAda *)(data + entryOffset);
+            if (entryAda->appId == 0x0085 || entryAda->appId == 0x0001) {
+                foundFwsec = true;
+                dataOffset = entryAda->dataOffset;
+                IOLog("NVDAAL-GSP: PMU Entry %d (Ada format): appId=0x%04x, dataOff=0x%x\n",
+                      i, entryAda->appId, dataOffset);
+            }
         }
 
-        // Look for FWSEC app (0x85 or 0x0085) or any app that points to valid ucode
-        if (appId == FWSEC_APP_ID_FWSEC || appId == 0x01) {
+        // Look for FWSEC app
+        if (foundFwsec) {
             uint32_t ucodeOffset = dataOffset;
             
             // Adjust offset - may be relative to FWSEC image
@@ -685,6 +901,17 @@ bool NVDAALGsp::parseVbios(const void *vbios, size_t size) {
             IOLog("NVDAAL-GSP: Ucode Desc: imemOff=0x%x imemSz=0x%x dmemOff=0x%x dmemSz=0x%x\n",
                   ucode->imemOffset, ucode->imemSize, ucode->dmemOffset, ucode->dmemSize);
 
+            // Validate descriptor has reasonable values
+            bool validDescriptor = (ucode->imemSize > 0 && ucode->imemSize < 0x80000 &&
+                                    ucode->dmemSize > 0 && ucode->dmemSize < 0x80000 &&
+                                    ucode->dataSize > 0 && ucode->dataSize < 0x100000);
+
+            if (!validDescriptor && storedSize == 0) {
+                IOLog("NVDAAL-GSP: Invalid descriptor at offset 0x%x (no NVFW header), skipping\n",
+                      ucodeOffset);
+                continue;  // Skip this entry, try next PMU entry
+            }
+
             // Store FWSEC info
             fwsecInfo.fwOffset = ucodeOffset;  // Original offset for DMA loading
             fwsecInfo.storedSize = storedSize > 0 ? storedSize : ucode->dataSize;
@@ -696,15 +923,50 @@ bool NVDAALGsp::parseVbios(const void *vbios, size_t size) {
             fwsecInfo.sigOffset = ucodeDescOffset + ucode->sigOffset;
             fwsecInfo.sigSize = ucode->sigSize;
             fwsecInfo.bootVec = ucode->bootVec;
-            fwsecInfo.valid = true;
+            fwsecInfo.valid = validDescriptor || (storedSize > 0);
 
             IOLog("NVDAAL-GSP: FWSEC StoredSize=0x%x fwOffset=0x%x\n",
                   fwsecInfo.storedSize, fwsecInfo.fwOffset);
-            
+
             IOLog("NVDAAL-GSP: FWSEC extracted: IMEM=0x%x(%u) DMEM=0x%x(%u)\n",
                   fwsecInfo.imemOffset, fwsecInfo.imemSize,
                   fwsecInfo.dmemOffset, fwsecInfo.dmemSize);
-            
+
+            // Extract signature patching fields from FalconUcodeDescV3Nvidia
+            // This structure is at the same offset as FalconUcodeDescV3 but has additional fields
+            if (ucodeDescOffset + sizeof(FalconUcodeDescV3Nvidia) <= size) {
+                const FalconUcodeDescV3Nvidia *ucodeNv = (const FalconUcodeDescV3Nvidia *)(data + ucodeDescOffset);
+
+                // Validate - vDesc should be reasonable (usually 0x10000003 for v3)
+                if ((ucodeNv->vDesc & 0x0000FFFF) == 3) {  // Version 3
+                    fwsecInfo.pkcDataOffset = ucodeNv->pkcDataOffset;
+                    fwsecInfo.interfaceOffset = ucodeNv->interfaceOffset;
+                    fwsecInfo.ucodeId = ucodeNv->ucodeId;
+                    fwsecInfo.signatureCount = ucodeNv->signatureCount;
+                    fwsecInfo.signatureVersions = ucodeNv->signatureVersions;
+
+                    // Signatures are stored immediately after the 44-byte header
+                    fwsecInfo.signaturesOffset = ucodeDescOffset + FALCON_UCODE_DESC_V3_SIZE;
+                    fwsecInfo.signaturesTotalSize = fwsecInfo.signatureCount * BCRT30_RSA3K_SIG_SIZE;
+
+                    IOLog("NVDAAL-GSP: FWSEC Signature Info: ucodeId=%d, sigCount=%d, sigVersions=0x%04x\n",
+                          fwsecInfo.ucodeId, fwsecInfo.signatureCount, fwsecInfo.signatureVersions);
+                    IOLog("NVDAAL-GSP: FWSEC Signature Patching: pkcDataOff=0x%x, interfaceOff=0x%x\n",
+                          fwsecInfo.pkcDataOffset, fwsecInfo.interfaceOffset);
+                    IOLog("NVDAAL-GSP: FWSEC Signatures at offset 0x%x, totalSize=%d bytes\n",
+                          fwsecInfo.signaturesOffset, fwsecInfo.signaturesTotalSize);
+                } else {
+                    IOLog("NVDAAL-GSP: vDesc=0x%08x - not v3 format, signature patching disabled\n",
+                          ucodeNv->vDesc);
+                    fwsecInfo.signatureCount = 0;
+                    fwsecInfo.pkcDataOffset = 0;
+                }
+            } else {
+                IOLog("NVDAAL-GSP: Descriptor too small for FalconUcodeDescV3Nvidia\n");
+                fwsecInfo.signatureCount = 0;
+                fwsecInfo.pkcDataOffset = 0;
+            }
+
             // Find DMEMMAPPER in DMEM
             if (fwsecInfo.dmemOffset + fwsecInfo.dmemSize <= size) {
                 const uint8_t *dmem = data + fwsecInfo.dmemOffset;
@@ -1320,6 +1582,202 @@ uint64_t NVDAALGsp::getWpr2Hi(void) {
     return wpr2Hi;
 }
 
+// ============================================================================
+// Fuse Version and Signature Helpers (from NVIDIA open-gpu-kernel-modules)
+// ============================================================================
+
+uint32_t NVDAALGsp::readUcodeFuseVersion(uint8_t ucodeId) {
+    // Read the fuse version for a given ucode ID
+    // Based on kgspReadUcodeFuseVersion_GA100 from NVIDIA driver
+
+    if (ucodeId == 0 || ucodeId > 16) {
+        IOLog("NVDAAL-GSP: Invalid ucodeId %d (must be 1-16)\n", ucodeId);
+        return 0;
+    }
+
+    uint32_t index = ucodeId - 1;  // Convert to 0-indexed
+    uint32_t fuseReg = NV_FUSE_OPT_FPF_GSP_UCODE1_VERSION + (4 * index);
+    uint32_t fuseVal = readReg(fuseReg);
+
+    IOLog("NVDAAL-GSP: Fuse reg 0x%08x (ucodeId=%d) = 0x%08x\n", fuseReg, ucodeId, fuseVal);
+
+    if (fuseVal == 0) {
+        return 0;
+    }
+
+    // Find highest bit set and return its index + 1
+    // HIGHESTBITIDX_32 equivalent
+    uint32_t version = 0;
+    uint32_t temp = fuseVal;
+    while (temp >>= 1) {
+        version++;
+    }
+
+    IOLog("NVDAAL-GSP: Fuse version for ucodeId %d = %d\n", ucodeId, version + 1);
+    return version + 1;
+}
+
+bool NVDAALGsp::patchFwsecSignature(uint8_t *dmem, size_t dmemSize) {
+    // Patch the RSA-3K signature into DMEM at pkcDataOffset
+    // Based on s_prepareForFwsec_TU102 from NVIDIA driver
+
+    if (!fwsecInfo.valid) {
+        IOLog("NVDAAL-GSP: FWSEC info not valid for signature patching\n");
+        return false;
+    }
+
+    if (fwsecInfo.signatureCount == 0 || fwsecInfo.signatureVersions == 0) {
+        IOLog("NVDAAL-GSP: No signatures available in FWSEC (count=%d, versions=0x%04x)\n",
+              fwsecInfo.signatureCount, fwsecInfo.signatureVersions);
+        return false;
+    }
+
+    // Read fuse version for this ucode
+    uint32_t fuseVersion = readUcodeFuseVersion(fwsecInfo.ucodeId);
+    if (fuseVersion == 0) {
+        IOLog("NVDAAL-GSP: Fuse version is 0, trying version 1 as default\n");
+        fuseVersion = 1;
+    }
+
+    // Convert fuse version to bit mask
+    uint32_t ucodeVersionBit = 1 << (fuseVersion - 1);
+    uint32_t sigVersions = fwsecInfo.signatureVersions;
+
+    IOLog("NVDAAL-GSP: Signature selection: fuseVer=%d, versionBit=0x%08x, sigVersions=0x%04x\n",
+          fuseVersion, ucodeVersionBit, sigVersions);
+
+    // Check if this fuse version has a signature
+    if ((ucodeVersionBit & sigVersions) == 0) {
+        IOLog("NVDAAL-GSP: ERROR: No signature for fuse version %d (sigVersions=0x%04x)\n",
+              fuseVersion, sigVersions);
+        return false;
+    }
+
+    // Calculate signature offset by counting set bits before our version
+    uint32_t sigOffset = 0;
+    uint32_t tempVersionBit = ucodeVersionBit;
+    uint32_t tempSigVersions = sigVersions;
+
+    while ((tempVersionBit & tempSigVersions & 1) == 0) {
+        sigOffset += (tempSigVersions & 1) * BCRT30_RSA3K_SIG_SIZE;
+        tempSigVersions >>= 1;
+        tempVersionBit >>= 1;
+    }
+
+    IOLog("NVDAAL-GSP: Selected signature at offset %d (index %d)\n",
+          sigOffset, sigOffset / BCRT30_RSA3K_SIG_SIZE);
+
+    // Validate offsets
+    if (fwsecInfo.pkcDataOffset + BCRT30_RSA3K_SIG_SIZE > dmemSize) {
+        IOLog("NVDAAL-GSP: ERROR: pkcDataOffset 0x%x + sigSize %d exceeds DMEM size %lu\n",
+              fwsecInfo.pkcDataOffset, BCRT30_RSA3K_SIG_SIZE, (unsigned long)dmemSize);
+        return false;
+    }
+
+    if (sigOffset + BCRT30_RSA3K_SIG_SIZE > fwsecInfo.signaturesTotalSize) {
+        IOLog("NVDAAL-GSP: ERROR: sigOffset %d + sigSize exceeds total signatures size %d\n",
+              sigOffset, fwsecInfo.signaturesTotalSize);
+        return false;
+    }
+
+    // Get pointer to signature data in VBIOS
+    const uint8_t *vbiosData = (const uint8_t *)fwsecMem->getBytesNoCopy();
+    const uint8_t *sigData = vbiosData + fwsecInfo.signaturesOffset + sigOffset;
+
+    // Patch signature into DMEM
+    IOLog("NVDAAL-GSP: Patching signature (%d bytes) at DMEM+0x%x\n",
+          BCRT30_RSA3K_SIG_SIZE, fwsecInfo.pkcDataOffset);
+    memcpy(dmem + fwsecInfo.pkcDataOffset, sigData, BCRT30_RSA3K_SIG_SIZE);
+
+    IOLog("NVDAAL-GSP: Signature patched successfully\n");
+    return true;
+}
+
+bool NVDAALGsp::patchFrtsCmdBuffer(uint8_t *dmem, size_t dmemSize, uint64_t frtsOffset) {
+    // Patch the FRTS command buffer in DMEM
+    // Based on s_prepareForFwsec_TU102 from NVIDIA driver
+
+    if (!fwsecInfo.valid) {
+        IOLog("NVDAAL-GSP: FWSEC info not valid for FRTS cmd patching\n");
+        return false;
+    }
+
+    // Find DMEMMAPPER in DMEM
+    DmemMapperHeader *mapper = nullptr;
+    if (fwsecInfo.dmemMapperOffset > 0 &&
+        fwsecInfo.dmemMapperOffset + sizeof(DmemMapperHeader) <= dmemSize) {
+        mapper = (DmemMapperHeader *)(dmem + fwsecInfo.dmemMapperOffset);
+    } else if (fwsecInfo.interfaceOffset > 0) {
+        // Try using interfaceOffset from DescV3Nvidia
+        // Interface header is: version(1), headerSize(1), entrySize(1), entryCount(1)
+        // Followed by entries: id(4), dmemOffset(4)
+        uint8_t *intfHdr = dmem + fwsecInfo.interfaceOffset;
+        if (fwsecInfo.interfaceOffset + 4 <= dmemSize) {
+            uint8_t entryCount = intfHdr[3];
+            uint32_t entryOffset = fwsecInfo.interfaceOffset + 4;
+
+            for (int i = 0; i < entryCount && entryOffset + 8 <= dmemSize; i++) {
+                uint32_t entryId = *(uint32_t *)(dmem + entryOffset);
+                uint32_t dmemOff = *(uint32_t *)(dmem + entryOffset + 4);
+
+                if (entryId == 0x4) {  // DMEMMAPPER entry ID
+                    if (dmemOff + sizeof(DmemMapperHeader) <= dmemSize) {
+                        mapper = (DmemMapperHeader *)(dmem + dmemOff);
+                        IOLog("NVDAAL-GSP: Found DMEMMAPPER via interface at DMEM+0x%x\n", dmemOff);
+                    }
+                    break;
+                }
+                entryOffset += 8;
+            }
+        }
+    }
+
+    if (!mapper) {
+        IOLog("NVDAAL-GSP: DMEMMAPPER not found in DMEM\n");
+        return false;
+    }
+
+    // Verify DMEMMAPPER signature
+    if (mapper->signature != DMEMMAPPER_SIGNATURE) {
+        IOLog("NVDAAL-GSP: Invalid DMEMMAPPER signature: 0x%08x (expected 0x%08x)\n",
+              mapper->signature, DMEMMAPPER_SIGNATURE);
+        return false;
+    }
+
+    // Patch init_cmd to FRTS (0x15)
+    IOLog("NVDAAL-GSP: Patching DMEMMAPPER: initCmd 0x%x -> 0x%x\n",
+          mapper->initCmd, DMEMMAPPER_CMD_FRTS);
+    mapper->initCmd = DMEMMAPPER_CMD_FRTS;
+
+    // Patch command buffer with FRTS command structure
+    if (mapper->cmdBufOffset + sizeof(FwsecFrtsCmd) <= dmemSize) {
+        FwsecFrtsCmd *frtsCmd = (FwsecFrtsCmd *)(dmem + mapper->cmdBufOffset);
+
+        // Fill readVbios descriptor
+        frtsCmd->readVbios.version = 1;
+        frtsCmd->readVbios.size = sizeof(FwsecReadVbiosDesc);
+        frtsCmd->readVbios.gfwImageOffset = 0;
+        frtsCmd->readVbios.gfwImageSize = 0;
+        frtsCmd->readVbios.flags = 2;  // FWSECLIC_READ_VBIOS_STRUCT_FLAGS
+
+        // Fill FRTS region descriptor
+        frtsCmd->frtsRegion.version = 1;
+        frtsCmd->frtsRegion.size = sizeof(FwsecFrtsRegionDesc);
+        frtsCmd->frtsRegion.frtsOffset4K = (uint32_t)(frtsOffset >> 12);
+        frtsCmd->frtsRegion.frtsSize4K = 0x100;  // 1MB in 4K units
+        frtsCmd->frtsRegion.mediaType = 2;  // FB
+
+        IOLog("NVDAAL-GSP: FRTS cmd patched: offset4K=0x%x, size4K=0x%x, type=%d\n",
+              frtsCmd->frtsRegion.frtsOffset4K, frtsCmd->frtsRegion.frtsSize4K,
+              frtsCmd->frtsRegion.mediaType);
+    } else {
+        IOLog("NVDAAL-GSP: Warning: cmdBufOffset 0x%x out of bounds, FRTS cmd not patched\n",
+              mapper->cmdBufOffset);
+    }
+
+    return true;
+}
+
 bool NVDAALGsp::executeFwsecFrts(void) {
     IOLog("NVDAAL-GSP: Executing FWSEC-FRTS...\n");
 
@@ -1333,8 +1791,22 @@ bool NVDAALGsp::executeFwsecFrts(void) {
         return true;
     }
 
+    // If no VBIOS loaded from file, try reading from PROM
+    // PROM contains VBIOS after GPU POST with FWSEC unencrypted
+    if (!fwsecMem && !vbiosMem) {
+        IOLog("NVDAAL-GSP: No VBIOS loaded, trying PROM reading (post-POST)...\n");
+        if (readVbiosFromProm()) {
+            IOLog("NVDAAL-GSP: Successfully read VBIOS from PROM!\n");
+            // Use vbiosMem instead of fwsecMem for parsing
+            fwsecMem = vbiosMem;
+            fwsecPhys = vbiosPhys;
+        } else {
+            IOLog("NVDAAL-GSP: Failed to read VBIOS from PROM\n");
+        }
+    }
+
     if (!fwsecMem) {
-        IOLog("NVDAAL-GSP: No VBIOS loaded, cannot run FWSEC\n");
+        IOLog("NVDAAL-GSP: No VBIOS available (file or PROM), cannot run FWSEC\n");
         IOLog("NVDAAL-GSP: WPR2 not configured - GSP may not boot correctly\n");
         return false;
     }
@@ -1435,16 +1907,38 @@ bool NVDAALGsp::executeFwsecFrts(void) {
     }
     memcpy(dmemCopy, dmem, fwsecInfo.dmemSize);
 
-    // Step 3: Patch DMEMMAPPER to execute FRTS command
-    if (fwsecInfo.dmemMapperOffset > 0 && 
-        fwsecInfo.dmemMapperOffset + sizeof(DmemMapperHeader) <= fwsecInfo.dmemSize) {
-        DmemMapperHeader *mapper = (DmemMapperHeader *)(dmemCopy + fwsecInfo.dmemMapperOffset);
-        
-        IOLog("NVDAAL-GSP: Patching DMEMMAPPER: old initCmd=0x%x\n", mapper->initCmd);
-        mapper->initCmd = DMEMMAPPER_CMD_FRTS;  // 0x15
-        IOLog("NVDAAL-GSP: Patched DMEMMAPPER: new initCmd=0x%x\n", mapper->initCmd);
+    // Step 3: Patch RSA signature into DMEM (required for HS mode verification)
+    // This must be done BEFORE loading ucode as Boot ROM verifies signature
+    if (fwsecInfo.signatureCount > 0 && fwsecInfo.pkcDataOffset > 0) {
+        IOLog("NVDAAL-GSP: Patching FWSEC signature...\n");
+        if (!patchFwsecSignature(dmemCopy, fwsecInfo.dmemSize)) {
+            IOLog("NVDAAL-GSP: Warning: Failed to patch FWSEC signature\n");
+            // Continue anyway - FWSEC may still work with pre-patched signature
+        }
     } else {
-        IOLog("NVDAAL-GSP: Warning: DMEMMAPPER not found, using DMEM as-is\n");
+        IOLog("NVDAAL-GSP: No signature info available (count=%d, pkcOff=0x%x)\n",
+              fwsecInfo.signatureCount, fwsecInfo.pkcDataOffset);
+    }
+
+    // Step 4: Patch FRTS command buffer in DMEMMAPPER
+    // Calculate FRTS offset at top of FB minus GSP_HEAP_SIZE minus FRTS_SIZE
+    // For 24GB VRAM: 0x600000000 - 0x8100000 - 0x100000 = ~0x5F7E00000
+    // But we use 0 here and let FWSEC figure it out from FB size
+    uint64_t frtsOffset = 0;  // FWSEC will compute actual offset based on FB size
+
+    if (!patchFrtsCmdBuffer(dmemCopy, fwsecInfo.dmemSize, frtsOffset)) {
+        IOLog("NVDAAL-GSP: Warning: Failed to patch FRTS cmd buffer, trying legacy method\n");
+
+        // Fallback: Try legacy DMEMMAPPER patch
+        if (fwsecInfo.dmemMapperOffset > 0 &&
+            fwsecInfo.dmemMapperOffset + sizeof(DmemMapperHeader) <= fwsecInfo.dmemSize) {
+            DmemMapperHeader *mapper = (DmemMapperHeader *)(dmemCopy + fwsecInfo.dmemMapperOffset);
+            IOLog("NVDAAL-GSP: Legacy patch DMEMMAPPER: old initCmd=0x%x\n", mapper->initCmd);
+            mapper->initCmd = DMEMMAPPER_CMD_FRTS;  // 0x15
+            IOLog("NVDAAL-GSP: Legacy patch DMEMMAPPER: new initCmd=0x%x\n", mapper->initCmd);
+        } else {
+            IOLog("NVDAAL-GSP: Warning: DMEMMAPPER not found, using DMEM as-is\n");
+        }
     }
 
     // Step 4: Load ucode into GSP Falcon

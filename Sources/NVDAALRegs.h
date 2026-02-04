@@ -43,6 +43,8 @@
 
 #define NV_PBUS_PRI_TIMEOUT_SAVE_0        0x00001460
 #define NV_PBUS_VBIOS_SCRATCH             0x00001400
+#define NV_PBUS_PCI_NV_19                 0x0000184C  // BAR0 state register
+#define NV_PBUS_BAR0_ACTIVE               (1 << 0)    // BAR0 active bit
 
 // ============================================================================
 // PFB (Framebuffer / Memory Controller)
@@ -334,6 +336,47 @@ typedef struct {
 // VBIOS offset in GPU memory (BAR0)
 #define VBIOS_ROM_OFFSET              0x300000
 
+// ============================================================================
+// PROM (Programmable ROM) Registers - For reading VBIOS from GPU
+// ============================================================================
+
+// NV_PROM_DATA: VBIOS PROM access via BAR0
+// The PROM space is at BAR0 + 0x180000
+// After GPU POST, the FWSEC firmware is unencrypted in PROM
+#define NV_PROM_BASE                  0x00180000
+#define NV_PROM_DATA(offset)          (NV_PROM_BASE + (offset))
+
+// Maximum VBIOS size (1MB typical for modern GPUs)
+#define NV_VBIOS_MAX_SIZE             0x100000
+
+// IFR (Initialization Flash Region) signatures
+#define NV_PBUS_IFR_FMT_FIXED0        0x00000000
+#define NV_PBUS_IFR_FMT_FIXED1        0x00000004
+#define NV_PBUS_IFR_FMT_FIXED2        0x00000008
+#define NV_PBUS_IFR_SIGNATURE_VALUE   0x4E564946  // "NVIF"
+
+// ROM Directory identifier
+#define NV_ROM_DIRECTORY_IDENTIFIER   0x44524652  // "RFRD"
+
+// VBIOS code types for expansion ROMs
+#define NV_VBIOS_CODE_TYPE_PCIAT      0x00  // PCI/AT BIOS (x86)
+#define NV_VBIOS_CODE_TYPE_EFI        0x03  // UEFI GOP
+#define NV_VBIOS_CODE_TYPE_FWSEC      0xE0  // FWSEC extension ROM
+
+// PCI ROM structure offsets
+#define PCI_ROM_SIGNATURE             0x55AA
+#define PCI_ROM_PCIR_OFFSET           0x18    // Offset to PCIR pointer
+#define PCI_ROM_IMAGE_BLOCK_SIZE      512     // Image length unit
+
+// PCIR structure offsets
+#define PCIR_SIGNATURE                0x52494350  // "PCIR"
+#define PCIR_VENDOR_OFFSET            0x04
+#define PCIR_DEVICE_OFFSET            0x06
+#define PCIR_IMAGE_LEN_OFFSET         0x10
+#define PCIR_CODE_TYPE_OFFSET         0x14
+#define PCIR_INDICATOR_OFFSET         0x15
+#define PCIR_LAST_IMAGE_FLAG          0x80
+
 // BIT (BIOS Information Table) constants
 #define BIT_HEADER_ID                 0xB8FF
 #define BIT_HEADER_SIGNATURE          0x00544942  // "BIT\0" little-endian
@@ -375,6 +418,19 @@ typedef struct {
 
 // FWSEC error register
 #define NV_PBUS_SW_SCRATCH_0E         0x0000143C
+
+// ============================================================================
+// Fuse Registers (for signature version selection)
+// ============================================================================
+#define NV_FUSE_OPT_FPF_GSP_UCODE1_VERSION  0x008241C0
+// Each subsequent ucode: base + 4 * (ucodeId - 1)
+// ucodeId is 1-indexed (FWSEC typically uses ucodeId from descriptor)
+
+// RSA-3K Signature Size (BCRT30)
+#define BCRT30_RSA3K_SIG_SIZE         384
+
+// FALCON_UCODE_DESC_V3 header size (excluding signatures)
+#define FALCON_UCODE_DESC_V3_SIZE     44
 
 // Radix3 page table constants
 #define GSP_RADIX3_LEVELS             4  // 0, 1, 2, 3
@@ -518,7 +574,56 @@ struct DmemMapperHeader {
     uint32_t reserved[8];
 };
 
-// FRTS Command Structure
+// ============================================================================
+// FALCON_UCODE_DESC_V3_NVIDIA - From NVIDIA open-gpu-kernel-modules
+// This is the format used in newer VBIOS for HS (Heavy Secure) mode loading
+// ============================================================================
+struct FalconUcodeDescV3Nvidia {
+    uint32_t vDesc;           // Version descriptor (header)
+    uint32_t storedSize;      // Total stored size of ucode
+    uint32_t pkcDataOffset;   // Offset in DMEM where RSA signature should be patched
+    uint32_t interfaceOffset; // Offset to Application Interface (DMEMMAPPER)
+    uint32_t imemPhysBase;
+    uint32_t imemLoadSize;
+    uint32_t imemVirtBase;
+    uint32_t dmemPhysBase;
+    uint32_t dmemLoadSize;
+    uint16_t engineIdMask;
+    uint8_t  ucodeId;         // Ucode ID (1-indexed, used for fuse version lookup)
+    uint8_t  signatureCount;  // Number of RSA signatures following this header
+    uint16_t signatureVersions; // Bitmask of fuse versions that have signatures
+    uint16_t reserved;
+};  // Total: 44 bytes. RSA signatures (384 bytes each) follow immediately after.
+
+// ============================================================================
+// FWSEC FRTS Command Structures (matching NVIDIA format)
+// ============================================================================
+
+// READ_VBIOS descriptor (part of FRTS command)
+struct FwsecReadVbiosDesc {
+    uint32_t version;         // 1
+    uint32_t size;            // sizeof(FwsecReadVbiosDesc)
+    uint64_t gfwImageOffset;  // 0 (not used for FRTS)
+    uint32_t gfwImageSize;    // 0 (not used for FRTS)
+    uint32_t flags;           // 2 (FWSECLIC_READ_VBIOS_STRUCT_FLAGS)
+};
+
+// FRTS Region descriptor
+struct FwsecFrtsRegionDesc {
+    uint32_t version;         // 1
+    uint32_t size;            // sizeof(FwsecFrtsRegionDesc)
+    uint32_t frtsOffset4K;    // FRTS offset >> 12 (in 4K units)
+    uint32_t frtsSize4K;      // 0x100 = 1MB in 4K units
+    uint32_t mediaType;       // 2 = FB (framebuffer)
+};
+
+// Complete FRTS command (patched into cmd_in_buffer)
+struct FwsecFrtsCmd {
+    FwsecReadVbiosDesc readVbios;
+    FwsecFrtsRegionDesc frtsRegion;
+};
+
+// Legacy FRTS structure (for compatibility)
 struct FrtsCmdRegion {
     uint8_t  version;
     uint8_t  regionType;      // 0 = FB (framebuffer)
@@ -554,6 +659,16 @@ struct FwsecInfo {
     uint32_t dmemMapperOffset;  // Offset of DMEMMAPPER in DMEM
     uint32_t storedSize;        // Total size for DMA loading (from NVFW_BIN_HDR)
     uint32_t fwOffset;          // Offset to firmware in VBIOS (for DMA)
+
+    // Signature patching fields (from FalconUcodeDescV3Nvidia)
+    uint32_t pkcDataOffset;     // Where in DMEM to patch the RSA signature
+    uint32_t interfaceOffset;   // Offset to Application Interface in DMEM
+    uint8_t  ucodeId;           // Ucode ID (1-indexed, for fuse version lookup)
+    uint8_t  signatureCount;    // Number of signatures available
+    uint16_t signatureVersions; // Bitmask of fuse versions with signatures
+    uint32_t signaturesOffset;  // Offset to signatures in VBIOS (after desc header)
+    uint32_t signaturesTotalSize; // Total size of all signatures
+
     bool     valid;
 };
 
