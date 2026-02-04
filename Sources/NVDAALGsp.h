@@ -95,6 +95,9 @@ public:
     // Helpers to generate unique handles
     uint32_t nextHandle() { return ++lastHandle; }
 
+    // FWSEC execution (public for UserClient access)
+    bool executeFwsecFrts(void);
+
 private:
     uint32_t lastHandle; // Simple handle generator
 
@@ -162,16 +165,22 @@ private:
     bool resetFalcon(void);
     bool resetSec2(void);
     bool executeBootloader(void);
-    bool executeFwsecFrts(void);
     bool executeFwsecSb(void);
     bool executeBooterLoad(void);
     bool startRiscv(void);
 
     // VBIOS / FWSEC helpers
+    bool readVbiosFromBar(void);  // Read VBIOS directly from BAR0 @ 0x300000
     bool parseVbios(const void *vbios, size_t size);
     bool loadFwsecFromVbios(void);
     bool loadFalconUcode(uint32_t falconBase, const void *imem, size_t imemSize,
                          const void *dmem, size_t dmemSize);
+
+    // DMA-based loading for Heavy Secure mode (Boot ROM signature verification)
+    bool loadFalconUcodeDma(uint32_t falconBase,
+                            IOBufferMemoryDescriptor *fwMem, uint64_t fwPhys,
+                            size_t fwSize, uint32_t bootVec);
+    bool executeFwsecViaBrom(void);  // Execute FWSEC using Boot ROM interface
 
     // WPR2 status
     bool checkWpr2Setup(void);

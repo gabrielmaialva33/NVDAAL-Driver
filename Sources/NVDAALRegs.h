@@ -84,6 +84,9 @@
 #define FALCON_DMATRFMOFFS                0x0114
 #define FALCON_DMATRFCMD                  0x0118
 #define FALCON_DMATRFFBOFFS               0x011C
+#define FALCON_DMATRFBASE1                0x0128  // High bits of DMA address
+#define FALCON_FBIF_CTL                   0x0624  // FB interface control
+#define FALCON_FBIF_TRANSCFG(i)           (0x0600 + (i) * 4)  // Transfer config
 #define FALCON_EXTERRADDR                 0x0168
 #define FALCON_EXTERRSTAT                 0x016C
 #define FALCON_ENGCTL                     0x01A4
@@ -334,7 +337,8 @@ typedef struct {
 // BIT (BIOS Information Table) constants
 #define BIT_HEADER_ID                 0xB8FF
 #define BIT_HEADER_SIGNATURE          0x00544942  // "BIT\0" little-endian
-#define BIT_TOKEN_FALCON_DATA         0x70
+#define BIT_TOKEN_PMU_TABLE           0x50  // Ada Lovelace: direct PMU table offsets
+#define BIT_TOKEN_FALCON_DATA         0x70  // Pre-Ada: Falcon ucode table (NOT PMU in Ada!)
 #define BIT_TOKEN_CLOCK_PTRS          0x43  // 'C'
 #define BIT_TOKEN_NOP                 0x00
 
@@ -353,6 +357,21 @@ typedef struct {
 #define FALCON_DMA_CMD_WRITE          0x00000002
 #define FALCON_DMA_CMD_IMEM           0x00000010
 #define FALCON_DMA_CMD_DMEM           0x00000000
+#define FALCON_DMA_CMD_IDLE           0x00000002  // DMA idle status bit
+
+// ITFEN (Interface Enable) bits
+#define FALCON_ITFEN_CTXEN            (1 << 0)    // Context switch enable
+#define FALCON_ITFEN_MTHDEN           (1 << 1)    // Method enable
+#define FALCON_ITFEN_DTFEN            (1 << 2)    // DMA transfer enable
+
+// FBIF_CTL bits
+#define FALCON_FBIF_CTL_ALLOW_PHYS_NO_CTX   0x00000080  // Allow physical without context
+#define FALCON_FBIF_CTL_ALLOW_PHYS          0x00000100  // Allow physical addressing
+
+// TRANSCFG values
+#define FALCON_TRANSCFG_TARGET_LOCAL_FB     0x00000000  // Target local FB
+#define FALCON_TRANSCFG_TARGET_COHERENT     0x00000004  // Target coherent memory
+#define FALCON_TRANSCFG_TARGET_NON_COHERENT 0x00000005  // Target non-coherent (system mem)
 
 // FWSEC error register
 #define NV_PBUS_SW_SCRATCH_0E         0x0000143C
@@ -407,12 +426,12 @@ struct VbiosNpdeHeader {
 struct BitHeader {
     uint16_t id;              // 0xB8FF
     uint32_t signature;       // "BIT\0"
-    uint8_t  version;
+    uint16_t version;         // 2 bytes! (was incorrectly 1 byte)
     uint8_t  headerSize;
     uint8_t  tokenSize;
     uint8_t  tokenCount;
     uint8_t  flags;
-};
+} __attribute__((packed));
 
 // BIT Token Entry
 struct BitToken {
@@ -420,12 +439,25 @@ struct BitToken {
     uint8_t  dataVersion;
     uint16_t dataSize;
     uint16_t dataOffset;      // Offset from VBIOS base
-};
+} __attribute__((packed));
 
-// Falcon Data Token (BIT 0x70)
+// Falcon Data Token (BIT 0x70) - Pre-Ada only
 struct BitFalconData {
     uint32_t ucodeTableOffset;
 };
+
+// PMU Table Token (BIT 0x50) - Ada Lovelace+
+// Contains direct offsets to PMU table candidates
+struct BitPmuTableToken {
+    uint8_t  version;         // Always 0x01 for Ada
+    uint8_t  entryCount;      // Number of PMU table offset entries
+    // Followed by entryCount uint32_t offsets (ROM-relative, LE)
+} __attribute__((packed));
+
+// PMU Table Signature (for validation)
+#define PMU_TABLE_SIGNATURE_V1       0x01  // version byte
+#define PMU_TABLE_HEADER_SIZE_V1     0x06  // header size byte
+#define PMU_TABLE_ENTRY_SIZE_V1      0x06  // entry size byte
 
 // PMU Lookup Table Header
 struct PmuLookupTableHeader {
@@ -436,12 +468,19 @@ struct PmuLookupTableHeader {
     uint16_t descSize;        // Version 2+ only
 };
 
-// PMU Lookup Table Entry (v3)
+// PMU Lookup Table Entry (v3) - Pre-Ada format
 struct PmuLookupEntry {
     uint8_t  appId;
     uint8_t  targetId;
     uint32_t dataOffset;      // Offset to falcon ucode descriptor
 };
+
+// PMU Lookup Table Entry - Ada Lovelace format (entrySize=6)
+// Ada uses 16-bit appId (0x0085 for FWSEC) + 32-bit offset
+struct PmuLookupEntryAda {
+    uint16_t appId;           // 16-bit appId (LE): 0x0085 = FWSEC
+    uint32_t dataOffset;      // Offset to falcon ucode descriptor
+} __attribute__((packed));
 
 // Falcon Ucode Descriptor (v3)
 struct FalconUcodeDescV3 {
@@ -491,6 +530,18 @@ struct FrtsCmdRegion {
 };
 
 // Extracted FWSEC Info
+// NVFW Binary Header (wraps falcon ucode)
+struct NvfwBinHdr {
+    uint16_t vendorId;        // 0x10DE for NVIDIA
+    uint16_t version;
+    uint32_t reserved;
+    uint32_t totalSize;
+    uint32_t headerOffset;
+    uint32_t headerSize;
+    uint32_t dataOffset;
+    uint32_t dataSize;
+};
+
 struct FwsecInfo {
     uint32_t imemOffset;
     uint32_t imemSize;
@@ -501,6 +552,8 @@ struct FwsecInfo {
     uint32_t sigSize;
     uint32_t bootVec;
     uint32_t dmemMapperOffset;  // Offset of DMEMMAPPER in DMEM
+    uint32_t storedSize;        // Total size for DMA loading (from NVFW_BIN_HDR)
+    uint32_t fwOffset;          // Offset to firmware in VBIOS (for DMA)
     bool     valid;
 };
 

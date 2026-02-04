@@ -249,6 +249,127 @@ bool NVDAALGsp::loadVbios(const void *data, size_t size) {
     return true;
 }
 
+bool NVDAALGsp::readVbiosFromBar(void) {
+    if (!initialized || !mmioBase) {
+        IOLog("NVDAAL-GSP: Cannot read VBIOS - not initialized\n");
+        return false;
+    }
+
+    IOLog("NVDAAL-GSP: Reading VBIOS from BAR0 @ 0x%x...\n", VBIOS_ROM_OFFSET);
+
+    // Free existing if any
+    freeDmaBuffer(&fwsecMem);
+
+    // VBIOS can be up to 1MB - allocate full size and scan for actual size
+    const size_t maxVbiosSize = 0x100000;  // 1MB max
+
+    // Allocate buffer
+    if (!allocDmaBuffer(&fwsecMem, maxVbiosSize, &fwsecPhys)) {
+        IOLog("NVDAAL-GSP: Failed to allocate VBIOS buffer\n");
+        return false;
+    }
+
+    uint8_t *vbios = (uint8_t *)fwsecMem->getBytesNoCopy();
+    memset(vbios, 0, maxVbiosSize);
+
+    // Read VBIOS from BAR0 in 32-bit chunks
+    // VBIOS is at offset 0x300000 in BAR0
+    for (size_t i = 0; i < maxVbiosSize; i += 4) {
+        uint32_t val = mmioBase[(VBIOS_ROM_OFFSET + i) / 4];
+        vbios[i + 0] = (val >> 0) & 0xFF;
+        vbios[i + 1] = (val >> 8) & 0xFF;
+        vbios[i + 2] = (val >> 16) & 0xFF;
+        vbios[i + 3] = (val >> 24) & 0xFF;
+    }
+
+    // Verify ROM signature at first image
+    // Note: The VBIOS may have a header before the actual ROM images
+    // Search for first 0x55AA signature
+    uint32_t romStart = 0;
+    for (uint32_t off = 0; off < 0x10000; off += 512) {
+        if (vbios[off] == 0x55 && vbios[off + 1] == 0xAA) {
+            romStart = off;
+            IOLog("NVDAAL-GSP: Found ROM signature at offset 0x%x\n", romStart);
+            break;
+        }
+    }
+
+    if (romStart == 0 && (vbios[0] != 0x55 || vbios[1] != 0xAA)) {
+        // Check for NVGI header (some VBIOSes have this)
+        if (vbios[0] == 'N' && vbios[1] == 'V' && vbios[2] == 'G' && vbios[3] == 'I') {
+            IOLog("NVDAAL-GSP: VBIOS has NVGI header, scanning for ROM images...\n");
+            // NVGI header present - ROM images are somewhere after
+            for (uint32_t off = 0x1000; off < 0x10000; off += 512) {
+                if (vbios[off] == 0x55 && vbios[off + 1] == 0xAA) {
+                    romStart = off;
+                    IOLog("NVDAAL-GSP: Found ROM signature at offset 0x%x\n", romStart);
+                    break;
+                }
+            }
+        }
+    }
+
+    // Scan for images and count them
+    int imageCount = 0;
+    int fwsecCount = 0;
+    uint32_t offset = romStart;
+    size_t actualSize = 0;
+
+    while (offset < maxVbiosSize - 32) {
+        if (vbios[offset] == 0x55 && vbios[offset + 1] == 0xAA) {
+            // Get PCIR offset
+            uint16_t pcirOff = vbios[offset + 0x18] | (vbios[offset + 0x19] << 8);
+            uint32_t pcirAddr = offset + pcirOff;
+
+            if (pcirAddr + 24 > maxVbiosSize) break;
+
+            // Verify PCIR signature
+            if (vbios[pcirAddr] == 'P' && vbios[pcirAddr + 1] == 'C' &&
+                vbios[pcirAddr + 2] == 'I' && vbios[pcirAddr + 3] == 'R') {
+
+                uint8_t codeType = vbios[pcirAddr + 20];
+                uint16_t imageLen = vbios[pcirAddr + 16] | (vbios[pcirAddr + 17] << 8);
+                uint8_t lastImage = vbios[pcirAddr + 21];
+
+                IOLog("NVDAAL-GSP: Image %d @ 0x%x: type=0x%02x, size=%u bytes%s\n",
+                      imageCount, offset, codeType, imageLen * 512,
+                      (lastImage & 0x80) ? " (LAST)" : "");
+
+                if (codeType == VBIOS_IMAGE_TYPE_FWSEC) {
+                    fwsecCount++;
+                    IOLog("NVDAAL-GSP: >>> Found FWSEC image #%d!\n", fwsecCount);
+                }
+
+                imageCount++;
+                actualSize = offset + imageLen * 512;
+
+                // Check if last image
+                if (lastImage & 0x80) {
+                    break;
+                }
+
+                offset += imageLen * 512;
+                // Align to 512-byte boundary
+                offset = (offset + 511) & ~511;
+            } else {
+                offset += 512;
+            }
+        } else {
+            offset += 512;
+        }
+    }
+
+    IOLog("NVDAAL-GSP: VBIOS read complete: %d images found, %d FWSEC images\n",
+          imageCount, fwsecCount);
+
+    if (fwsecCount == 0) {
+        IOLog("NVDAAL-GSP: WARNING - No FWSEC images found in VBIOS!\n");
+        IOLog("NVDAAL-GSP: FWSEC may be in PMU Lookup Table or WPR2 set by EFI\n");
+    }
+
+    return imageCount > 0;
+}
+
 // ============================================================================
 // VBIOS / FWSEC Parsing
 // ============================================================================
@@ -310,90 +431,223 @@ bool NVDAALGsp::parseVbios(const void *vbios, size_t size) {
     }
     
     if (fwsecStart == 0) {
-        IOLog("NVDAAL-GSP: No FWSEC image found in VBIOS\n");
-        return false;
+        IOLog("NVDAAL-GSP: No FWSEC image (type 0xE0) in VBIOS - trying PMU Lookup Table\n");
+        // In modern VBIOSs, FWSEC is found via PMU Lookup Table, not as separate image
+    } else {
+        fwsecImageOffset = fwsecStart;
+        fwsecImageSize = fwsecLen;
     }
     
-    fwsecImageOffset = fwsecStart;
-    fwsecImageSize = fwsecLen;
-    
     // Step 2: Find BIT header in VBIOS (usually in first image)
+    // Also find the base offset of the image containing BIT
     const uint8_t bitPattern[] = {0xFF, 0xB8, 'B', 'I', 'T', 0x00};
     uint32_t bitOffset = 0;
+    uint32_t imageBase = 0;  // Base offset of image containing BIT
+    
+    // First, find image boundaries
+    uint32_t lastImageStart = 0;
+    for (uint32_t i = 0; i < size - 2; i += 512) {
+        if (data[i] == 0x55 && data[i + 1] == 0xAA) {
+            lastImageStart = i;
+        }
+    }
     
     for (uint32_t i = 0; i < size - 6; i++) {
         if (memcmp(data + i, bitPattern, 6) == 0) {
             bitOffset = i;
+            // Find which image contains this BIT
+            for (uint32_t j = 0; j < size - 2; j += 512) {
+                if (data[j] == 0x55 && data[j + 1] == 0xAA && j <= bitOffset) {
+                    imageBase = j;
+                }
+            }
             break;
         }
     }
     
     if (bitOffset == 0) {
         IOLog("NVDAAL-GSP: BIT header not found\n");
-        // Try to use FWSEC image directly without BIT parsing
-        fwsecInfo.valid = false;
-        return true;  // Continue anyway, we found FWSEC image
-    }
-    
-    IOLog("NVDAAL-GSP: Found BIT header at 0x%x\n", bitOffset);
-    
-    const BitHeader *bit = (const BitHeader *)(data + bitOffset);
-    
-    // Step 3: Scan BIT tokens for FALCON_DATA (0x70)
-    uint32_t tokenOffset = bitOffset + bit->headerSize;
-    uint32_t falconDataOffset = 0;
-    
-    for (int i = 0; i < bit->tokenCount && tokenOffset < size - sizeof(BitToken); i++) {
-        const BitToken *token = (const BitToken *)(data + tokenOffset);
-        
-        if (token->id == BIT_TOKEN_FALCON_DATA) {
-            falconDataOffset = token->dataOffset;
-            IOLog("NVDAAL-GSP: Found Falcon Data token at 0x%x\n", falconDataOffset);
-            break;
-        }
-        
-        tokenOffset += bit->tokenSize;
-    }
-    
-    if (falconDataOffset == 0) {
-        IOLog("NVDAAL-GSP: Falcon Data token not found in BIT\n");
         fwsecInfo.valid = false;
         return true;
     }
     
-    // Step 4: Read Falcon Data - points to PMU Lookup Table
-    if (falconDataOffset + sizeof(BitFalconData) > size) {
-        IOLog("NVDAAL-GSP: Invalid Falcon Data offset\n");
-        return false;
+    IOLog("NVDAAL-GSP: Found BIT header at 0x%x (image base 0x%x)\n", bitOffset, imageBase);
+    
+    const BitHeader *bit = (const BitHeader *)(data + bitOffset);
+
+    // Step 3: Scan BIT tokens - Ada Lovelace uses Token 0x50, older uses Token 0x70
+    // IMPORTANT: Token 0x70 (FALCON_DATA) points to GSP microcode in Ada, NOT PMU table!
+    // Token 0x50 contains direct offsets to PMU table candidates.
+    uint32_t tokenOffset = bitOffset + bit->headerSize;
+    uint32_t pmuTokenOffset = 0;
+    uint32_t falconDataOffset = 0;
+    uint16_t pmuTokenDataSize = 0;
+
+    for (int i = 0; i < bit->tokenCount && tokenOffset < size - sizeof(BitToken); i++) {
+        const BitToken *token = (const BitToken *)(data + tokenOffset);
+
+        if (token->id == BIT_TOKEN_PMU_TABLE) {
+            // Token 0x50: Ada Lovelace PMU table offsets
+            pmuTokenOffset = imageBase + token->dataOffset;
+            pmuTokenDataSize = token->dataSize;
+            IOLog("NVDAAL-GSP: Found PMU Table token (0x50) at 0x%x (rel 0x%x), size=%d\n",
+                  pmuTokenOffset, token->dataOffset, pmuTokenDataSize);
+        } else if (token->id == BIT_TOKEN_FALCON_DATA) {
+            // Token 0x70: Pre-Ada Falcon ucode table
+            falconDataOffset = imageBase + token->dataOffset;
+            IOLog("NVDAAL-GSP: Found Falcon Data token (0x70) at 0x%x (rel 0x%x)\n",
+                  falconDataOffset, token->dataOffset);
+        }
+
+        tokenOffset += bit->tokenSize;
     }
-    
-    const BitFalconData *falconData = (const BitFalconData *)(data + falconDataOffset);
-    uint32_t pmuTableOffset = falconData->ucodeTableOffset;
-    
-    IOLog("NVDAAL-GSP: PMU Lookup Table at 0x%x\n", pmuTableOffset);
-    
-    // Step 5: Parse PMU Lookup Table to find FWSEC ucode
-    if (pmuTableOffset + sizeof(PmuLookupTableHeader) > size) {
-        IOLog("NVDAAL-GSP: Invalid PMU table offset\n");
-        return false;
+
+    uint32_t pmuTableOffset = 0;
+    const PmuLookupTableHeader *pmuHdr = nullptr;
+
+    // Step 4: Ada Lovelace path - use Token 0x50 directly
+    if (pmuTokenOffset != 0 && pmuTokenDataSize >= 2) {
+        IOLog("NVDAAL-GSP: Using Ada Lovelace Token 0x50 path for PMU table\n");
+
+        if (pmuTokenOffset + pmuTokenDataSize > size) {
+            IOLog("NVDAAL-GSP: Invalid PMU token offset\n");
+            return false;
+        }
+
+        // Token 0x50 format: Raw array of 32-bit offsets (NO header in Ada Lovelace!)
+        // Each offset may point to various tables - we check each for PMU signature
+        const uint8_t *pmuTokenData = data + pmuTokenOffset;
+        const uint32_t *offsets = (const uint32_t *)pmuTokenData;
+        int numOffsets = pmuTokenDataSize / 4;
+
+        IOLog("NVDAAL-GSP: Token 0x50: %d potential offsets\n", numOffsets);
+
+        // Try each offset to find valid PMU table
+        for (int i = 0; i < numOffsets && i < 64 && pmuTableOffset == 0; i++) {
+            uint32_t candidateOffset = offsets[i];
+
+            // Skip zero or invalid offsets
+            if (candidateOffset == 0 || candidateOffset + sizeof(PmuLookupTableHeader) > size) {
+                continue;
+            }
+
+            const PmuLookupTableHeader *testHdr = (const PmuLookupTableHeader *)(data + candidateOffset);
+
+            // Validate PMU table header signature: version=1, headerSize=6, entrySize=6
+            if (testHdr->version == PMU_TABLE_SIGNATURE_V1 &&
+                testHdr->headerSize == PMU_TABLE_HEADER_SIZE_V1 &&
+                testHdr->entrySize == PMU_TABLE_ENTRY_SIZE_V1 &&
+                testHdr->entryCount >= 1 && testHdr->entryCount <= 32) {
+
+                IOLog("NVDAAL-GSP: Found valid PMU table at 0x%x via Token 0x50 (entry %d)\n",
+                      candidateOffset, i);
+                pmuTableOffset = candidateOffset;
+                pmuHdr = testHdr;
+                break;
+            }
+        }
+
+        if (pmuTableOffset == 0) {
+            IOLog("NVDAAL-GSP: Token 0x50 offsets don't contain PMU table, will use pattern search\n");
+        }
     }
-    
-    const PmuLookupTableHeader *pmuHdr = (const PmuLookupTableHeader *)(data + pmuTableOffset);
-    
-    IOLog("NVDAAL-GSP: PMU Table: version=%d, entries=%d, entrySize=%d\n",
-          pmuHdr->version, pmuHdr->entryCount, pmuHdr->entrySize);
+
+    // Step 4b: Pre-Ada fallback - use Token 0x70 (FALCON_DATA)
+    if (pmuTableOffset == 0 && falconDataOffset != 0) {
+        IOLog("NVDAAL-GSP: Using pre-Ada Token 0x70 path for PMU table\n");
+
+        if (falconDataOffset + sizeof(BitFalconData) > size) {
+            IOLog("NVDAAL-GSP: Invalid Falcon Data offset\n");
+            return false;
+        }
+
+        const BitFalconData *falconData = (const BitFalconData *)(data + falconDataOffset);
+        uint32_t pmuTableOffsetRaw = falconData->ucodeTableOffset;
+
+        IOLog("NVDAAL-GSP: PMU Lookup Table raw offset: 0x%x\n", pmuTableOffsetRaw);
+
+        // PMU table offset is relative to image base
+        pmuTableOffset = imageBase + pmuTableOffsetRaw;
+        IOLog("NVDAAL-GSP: PMU Lookup Table absolute: 0x%x (imageBase=0x%x)\n", pmuTableOffset, imageBase);
+
+        if (pmuTableOffset + sizeof(PmuLookupTableHeader) <= size) {
+            pmuHdr = (const PmuLookupTableHeader *)(data + pmuTableOffset);
+        }
+    }
+
+    // Step 5: Validate PMU table or search by pattern
+    if (pmuTableOffset == 0 || pmuHdr == nullptr) {
+        IOLog("NVDAAL-GSP: No PMU table found via BIT tokens\n");
+        fwsecInfo.valid = false;
+        return true;
+    }
+
+    IOLog("NVDAAL-GSP: PMU Table: version=%d, entries=%d, entrySize=%d, headerSize=%d\n",
+          pmuHdr->version, pmuHdr->entryCount, pmuHdr->entrySize, pmuHdr->headerSize);
+
+    // If PMU table looks invalid, search for it by pattern
+    if (pmuHdr->entryCount == 0 || pmuHdr->version > 10 || pmuHdr->entrySize < 4 || pmuHdr->entrySize > 200) {
+        IOLog("NVDAAL-GSP: PMU table looks invalid, searching by pattern...\n");
+
+        // Search for PMU table pattern: version 1, headerSize 6, entrySize 6 (Ada signature)
+        bool found = false;
+        for (uint32_t searchOffset = 0x9000; searchOffset < size - 0x100 && !found; searchOffset += 4) {
+            const PmuLookupTableHeader *testHdr = (const PmuLookupTableHeader *)(data + searchOffset);
+
+            // Check for Ada Lovelace PMU table signature: 01 06 06 xx
+            if (testHdr->version == 1 && testHdr->headerSize == 6 && testHdr->entrySize == 6 &&
+                testHdr->entryCount >= 1 && testHdr->entryCount <= 32) {
+
+                // Verify entries contain FWSEC (appId 0x85)
+                uint32_t testEntryOffset = searchOffset + testHdr->headerSize;
+                for (int i = 0; i < testHdr->entryCount && testEntryOffset + testHdr->entrySize <= size; i++) {
+                    const PmuLookupEntry *testEntry = (const PmuLookupEntry *)(data + testEntryOffset);
+                    if (testEntry->appId == 0x85) {
+                        IOLog("NVDAAL-GSP: Found valid PMU table at 0x%x with FWSEC entry!\n", searchOffset);
+                        pmuTableOffset = searchOffset;
+                        pmuHdr = (const PmuLookupTableHeader *)(data + pmuTableOffset);
+                        found = true;
+                        break;
+                    }
+                    testEntryOffset += testHdr->entrySize;
+                }
+            }
+        }
+
+        if (!found) {
+            IOLog("NVDAAL-GSP: Could not find valid PMU table by search\n");
+        }
+    }
     
     uint32_t entryOffset = pmuTableOffset + pmuHdr->headerSize;
-    
+
+    // Detect Ada Lovelace format: headerSize=6, entrySize=6 (signature: 01 06 06)
+    bool isAdaFormat = (pmuHdr->headerSize == 6 && pmuHdr->entrySize == 6);
+    IOLog("NVDAAL-GSP: PMU entry format: %s\n", isAdaFormat ? "Ada (6-byte)" : "Pre-Ada");
+
     for (int i = 0; i < pmuHdr->entryCount && entryOffset < size - pmuHdr->entrySize; i++) {
-        const PmuLookupEntry *entry = (const PmuLookupEntry *)(data + entryOffset);
-        
-        IOLog("NVDAAL-GSP: PMU Entry %d: appId=0x%02x, targetId=0x%02x, dataOff=0x%x\n",
-              i, entry->appId, entry->targetId, entry->dataOffset);
-        
-        // Look for FWSEC app (0x85) or any app that points to valid ucode
-        if (entry->appId == FWSEC_APP_ID_FWSEC || entry->appId == 0x01) {
-            uint32_t ucodeOffset = entry->dataOffset;
+        uint16_t appId;
+        uint32_t dataOffset;
+
+        if (isAdaFormat) {
+            // Ada Lovelace: 2-byte appId (LE) + 4-byte offset
+            const PmuLookupEntryAda *entry = (const PmuLookupEntryAda *)(data + entryOffset);
+            appId = entry->appId;
+            dataOffset = entry->dataOffset;
+            IOLog("NVDAAL-GSP: PMU Entry %d (Ada): appId=0x%04x, dataOff=0x%x\n",
+                  i, appId, dataOffset);
+        } else {
+            // Pre-Ada: 1-byte appId + 1-byte targetId + 4-byte offset
+            const PmuLookupEntry *entry = (const PmuLookupEntry *)(data + entryOffset);
+            appId = entry->appId;
+            dataOffset = entry->dataOffset;
+            IOLog("NVDAAL-GSP: PMU Entry %d: appId=0x%02x, targetId=0x%02x, dataOff=0x%x\n",
+                  i, entry->appId, entry->targetId, dataOffset);
+        }
+
+        // Look for FWSEC app (0x85 or 0x0085) or any app that points to valid ucode
+        if (appId == FWSEC_APP_ID_FWSEC || appId == 0x01) {
+            uint32_t ucodeOffset = dataOffset;
             
             // Adjust offset - may be relative to FWSEC image
             if (ucodeOffset < fwsecStart) {
@@ -404,21 +658,48 @@ bool NVDAALGsp::parseVbios(const void *vbios, size_t size) {
                 continue;
             }
             
-            const FalconUcodeDescV3 *ucode = (const FalconUcodeDescV3 *)(data + ucodeOffset);
-            
+            // Check if there's a NVFW binary header before the ucode descriptor
+            // The binary header has vendorId=0x10DE at the start
+            const NvfwBinHdr *binHdr = (const NvfwBinHdr *)(data + ucodeOffset);
+            uint32_t ucodeDescOffset = ucodeOffset;
+            uint32_t storedSize = 0;
+
+            if (binHdr->vendorId == 0x10DE && binHdr->version >= 1 && binHdr->version <= 0x10) {
+                // We have a binary header - storedSize comes after it
+                IOLog("NVDAAL-GSP: Found NVFW_BIN_HDR: vendorId=0x%04x ver=%d totalSize=0x%x\n",
+                      binHdr->vendorId, binHdr->version, binHdr->totalSize);
+
+                // StoredSize is at offset 0x18 (after the 24-byte BinHdr)
+                storedSize = *(const uint32_t *)(data + ucodeOffset + sizeof(NvfwBinHdr));
+                ucodeDescOffset = ucodeOffset + binHdr->headerOffset;
+
+                IOLog("NVDAAL-GSP: StoredSize=0x%x, ucodeDesc at 0x%x\n", storedSize, ucodeDescOffset);
+            }
+
+            if (ucodeDescOffset + sizeof(FalconUcodeDescV3) > size) {
+                continue;
+            }
+
+            const FalconUcodeDescV3 *ucode = (const FalconUcodeDescV3 *)(data + ucodeDescOffset);
+
             IOLog("NVDAAL-GSP: Ucode Desc: imemOff=0x%x imemSz=0x%x dmemOff=0x%x dmemSz=0x%x\n",
                   ucode->imemOffset, ucode->imemSize, ucode->dmemOffset, ucode->dmemSize);
-            
+
             // Store FWSEC info
-            fwsecInfo.imemOffset = ucodeOffset + ucode->imemOffset;
+            fwsecInfo.fwOffset = ucodeOffset;  // Original offset for DMA loading
+            fwsecInfo.storedSize = storedSize > 0 ? storedSize : ucode->dataSize;
+            fwsecInfo.imemOffset = ucodeDescOffset + ucode->imemOffset;
             fwsecInfo.imemSize = ucode->imemSize;
             fwsecInfo.imemSecSize = ucode->imemSecureSize;
-            fwsecInfo.dmemOffset = ucodeOffset + ucode->dmemOffset;
+            fwsecInfo.dmemOffset = ucodeDescOffset + ucode->dmemOffset;
             fwsecInfo.dmemSize = ucode->dmemSize;
-            fwsecInfo.sigOffset = ucodeOffset + ucode->sigOffset;
+            fwsecInfo.sigOffset = ucodeDescOffset + ucode->sigOffset;
             fwsecInfo.sigSize = ucode->sigSize;
             fwsecInfo.bootVec = ucode->bootVec;
             fwsecInfo.valid = true;
+
+            IOLog("NVDAAL-GSP: FWSEC StoredSize=0x%x fwOffset=0x%x\n",
+                  fwsecInfo.storedSize, fwsecInfo.fwOffset);
             
             IOLog("NVDAAL-GSP: FWSEC extracted: IMEM=0x%x(%u) DMEM=0x%x(%u)\n",
                   fwsecInfo.imemOffset, fwsecInfo.imemSize,
@@ -480,6 +761,167 @@ bool NVDAALGsp::loadFalconUcode(uint32_t falconBase, const void *imem, size_t im
     
     IOLog("NVDAAL-GSP: Falcon ucode loaded\n");
     return true;
+}
+
+// ============================================================================
+// DMA-based Falcon Loading (for Heavy Secure mode)
+// This allows the Boot ROM to verify the RSA-3K signature of FWSEC firmware
+// ============================================================================
+
+bool NVDAALGsp::loadFalconUcodeDma(uint32_t falconBase,
+                                    IOBufferMemoryDescriptor *fwMem, uint64_t fwPhys,
+                                    size_t fwSize, uint32_t bootVec) {
+    IOLog("NVDAAL-GSP: Loading Falcon via DMA: phys=0x%llx size=%lu bootVec=0x%x\n",
+          fwPhys, (unsigned long)fwSize, bootVec);
+
+    // Step 1: Reset the Falcon engine
+    IOLog("NVDAAL-GSP: Resetting Falcon engine...\n");
+    writeReg(falconBase + FALCON_CPUCTL, 0);
+    IODelay(100);
+
+    // Read hardware config
+    uint32_t hwcfg = readReg(falconBase + FALCON_HWCFG);
+    IOLog("NVDAAL-GSP: HWCFG=0x%08x\n", hwcfg);
+
+    // Step 2: Enable DMA interface
+    IOLog("NVDAAL-GSP: Enabling DMA interface...\n");
+    writeReg(falconBase + FALCON_ITFEN, FALCON_ITFEN_DTFEN);  // Enable DMA transfers
+
+    // Step 3: Configure FBIF for system memory DMA
+    // Target non-coherent system memory (0x5)
+    writeReg(falconBase + FALCON_FBIF_TRANSCFG(0), FALCON_TRANSCFG_TARGET_NON_COHERENT);
+    writeReg(falconBase + FALCON_FBIF_TRANSCFG(1), FALCON_TRANSCFG_TARGET_NON_COHERENT);
+
+    // Allow physical addressing
+    writeReg(falconBase + FALCON_FBIF_CTL,
+             FALCON_FBIF_CTL_ALLOW_PHYS | FALCON_FBIF_CTL_ALLOW_PHYS_NO_CTX);
+
+    // Step 4: Set DMA base address (physical address >> 8)
+    uint32_t dmaBase = (uint32_t)(fwPhys >> 8);
+    uint32_t dmaBase1 = (uint32_t)(fwPhys >> 40);  // High bits for >4GB addresses
+    writeReg(falconBase + FALCON_DMATRFBASE, dmaBase);
+    writeReg(falconBase + FALCON_DMATRFBASE1, dmaBase1);
+    IOLog("NVDAAL-GSP: DMA base set: 0x%08x (hi: 0x%08x)\n", dmaBase, dmaBase1);
+
+    // Verify readback
+    uint32_t readBack = readReg(falconBase + FALCON_DMATRFBASE);
+    if (readBack != dmaBase) {
+        IOLog("NVDAAL-GSP: Warning: DMA base readback mismatch: wrote 0x%08x, read 0x%08x\n",
+              dmaBase, readBack);
+    }
+
+    // Step 5: DMA transfer firmware to IMEM
+    // Transfer in 256-byte blocks
+    IOLog("NVDAAL-GSP: DMA loading firmware (%lu bytes)...\n", (unsigned long)fwSize);
+
+    for (size_t offset = 0; offset < fwSize; offset += 256) {
+        // Set memory offset in Falcon IMEM
+        writeReg(falconBase + FALCON_DMATRFMOFFS, (uint32_t)offset);
+
+        // Set FB offset (offset within DMA buffer)
+        writeReg(falconBase + FALCON_DMATRFFBOFFS, (uint32_t)offset);
+
+        // Issue DMA command: read from FB to IMEM
+        uint32_t cmd = FALCON_DMA_CMD_IMEM;  // Target IMEM, read direction
+        writeReg(falconBase + FALCON_DMATRFCMD, cmd);
+
+        // Wait for DMA to complete
+        for (int wait = 0; wait < 1000; wait++) {
+            uint32_t status = readReg(falconBase + FALCON_DMATRFCMD);
+            if (status & FALCON_DMA_CMD_IDLE) {
+                break;
+            }
+            IODelay(10);
+        }
+    }
+
+    IOLog("NVDAAL-GSP: DMA transfer complete\n");
+
+    // Step 6: Set boot vector
+    writeReg(falconBase + FALCON_BOOTVEC, bootVec);
+
+    // Step 7: Start Falcon
+    IOLog("NVDAAL-GSP: Starting Falcon execution...\n");
+    writeReg(falconBase + FALCON_CPUCTL, FALCON_CPUCTL_STARTCPU);
+
+    return true;
+}
+
+bool NVDAALGsp::executeFwsecViaBrom(void) {
+    IOLog("NVDAAL-GSP: Executing FWSEC via Boot ROM interface...\n");
+
+    if (!fwsecMem || !fwsecInfo.valid) {
+        IOLog("NVDAAL-GSP: No valid FWSEC firmware loaded\n");
+        return false;
+    }
+
+    // The Boot ROM interface on Ada Lovelace uses the RISCV BCR (Boot Config Region)
+    // to load and verify signed firmware
+
+    // Step 1: Prepare FWSEC firmware in DMA-accessible buffer
+    // The firmware is inside the VBIOS buffer at fwsecInfo.fwOffset
+    size_t fwsecSize = fwsecInfo.storedSize;
+    if (fwsecSize == 0) {
+        fwsecSize = fwsecInfo.imemSize + fwsecInfo.dmemSize;
+        IOLog("NVDAAL-GSP: Warning: Using calculated size %lu (no storedSize)\n",
+              (unsigned long)fwsecSize);
+    }
+
+    // Calculate actual physical address of FWSEC firmware within VBIOS buffer
+    uint64_t fwsecFwPhys = fwsecPhys + fwsecInfo.fwOffset;
+
+    IOLog("NVDAAL-GSP: FWSEC for BROM: size=%lu @ phys 0x%llx (vbios+0x%x)\n",
+          (unsigned long)fwsecSize, fwsecFwPhys, fwsecInfo.fwOffset);
+
+    // Step 2: Check GSP RISC-V BCR_CTRL state
+    uint32_t bcrCtrl = readReg(NV_PRISCV_RISCV_BCR_CTRL);
+    IOLog("NVDAAL-GSP: BCR_CTRL initial state: 0x%08x\n", bcrCtrl);
+
+    // Step 3: Set firmware address in BCR_DMEM_ADDR
+    // This tells the Boot ROM where to find the signed firmware
+    // Note: BCR uses physical address >> 8 for alignment
+    uint32_t fwAddr = (uint32_t)(fwsecFwPhys >> 8);
+    writeReg(NV_PRISCV_RISCV_BCR_DMEM_ADDR, fwAddr);
+    IOLog("NVDAAL-GSP: BCR_DMEM_ADDR set to 0x%08x (phys: 0x%llx)\n", fwAddr, fwsecFwPhys);
+
+    // Step 4: Trigger Boot ROM by setting BCR_CTRL valid bit
+    writeReg(NV_PRISCV_RISCV_BCR_CTRL, NV_PRISCV_RISCV_BCR_CTRL_VALID);
+    IOLog("NVDAAL-GSP: BCR_CTRL triggered\n");
+
+    // Step 5: Wait for Boot ROM to execute FWSEC
+    IOLog("NVDAAL-GSP: Waiting for Boot ROM execution...\n");
+
+    for (int i = 0; i < 5000; i++) {  // 5 second timeout
+        uint32_t cpuctl = readReg(NV_PRISCV_RISCV_CPUCTL);
+        uint32_t retcode = readReg(NV_PRISCV_RISCV_BR_RETCODE);
+
+        if (cpuctl & NV_PRISCV_CPUCTL_HALTED) {
+            IOLog("NVDAAL-GSP: Boot ROM halted, retcode=0x%08x, cpuctl=0x%08x\n",
+                  retcode, cpuctl);
+
+            if (retcode == 0) {
+                IOLog("NVDAAL-GSP: Boot ROM executed FWSEC successfully!\n");
+            } else {
+                IOLog("NVDAAL-GSP: Boot ROM returned error: 0x%08x\n", retcode);
+            }
+            break;
+        }
+
+        if (i == 100 || i == 1000 || i == 3000) {
+            IOLog("NVDAAL-GSP: Still waiting... cpuctl=0x%08x\n", cpuctl);
+        }
+
+        IODelay(1000);  // 1ms
+    }
+
+    // Step 6: Check if WPR2 was configured
+    if (checkWpr2Setup()) {
+        IOLog("NVDAAL-GSP: WPR2 configured via Boot ROM!\n");
+        return true;
+    }
+
+    IOLog("NVDAAL-GSP: Boot ROM did not configure WPR2\n");
+    return false;
 }
 
 bool NVDAALGsp::parseElfFirmware(const void *data, size_t size) {
@@ -745,15 +1187,22 @@ int NVDAALGsp::bootEx(void) {
     }
 
     // Step 2: Execute FWSEC-FRTS to set up WPR2
-    // (This requires VBIOS to be loaded, or WPR2 already set by EFI)
+    // First, try to read VBIOS from BAR0 if not already loaded
+    if (!fwsecMem) {
+        IOLog("NVDAAL-GSP: Step 2a - Reading VBIOS from BAR0...\n");
+        if (!readVbiosFromBar()) {
+            IOLog("NVDAAL-GSP: Failed to read VBIOS from BAR0\n");
+        }
+    }
+
     if (fwsecMem) {
-        IOLog("NVDAAL-GSP: Step 2 - Execute FWSEC-FRTS\n");
+        IOLog("NVDAAL-GSP: Step 2b - Execute FWSEC-FRTS\n");
         if (!executeFwsecFrts()) {
             IOLog("NVDAAL-GSP: FWSEC-FRTS failed - continuing in debug mode\n");
             // Don't return error - try to continue anyway
         }
     } else {
-        IOLog("NVDAAL-GSP: Step 2 - FWSEC not loaded, checking WPR2 status\n");
+        IOLog("NVDAAL-GSP: Step 2b - No VBIOS available, checking WPR2 status\n");
         if (!checkWpr2Setup()) {
             IOLog("NVDAAL-GSP: WPR2 not set up - continuing in debug mode\n");
         }
@@ -817,18 +1266,32 @@ bool NVDAALGsp::resetFalcon(void) {
 }
 
 bool NVDAALGsp::resetSec2(void) {
-    // Reset SEC2 FALCON
-    IOLog("NVDAAL-GSP: Resetting SEC2...\n");
+    // Reset SEC2 RISC-V (Ada Lovelace uses RISC-V, not classic Falcon)
+    IOLog("NVDAAL-GSP: Resetting SEC2 RISC-V...\n");
 
+    // For RISC-V cores, we need to use the RISCV registers
+    uint32_t cpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+    IOLog("NVDAAL-GSP: SEC2 RISCV_CPUCTL before reset: 0x%08x\n", cpuctl);
+    
+    // Try Falcon reset first (some hybrid cores need this)
     writeReg(NV_PSEC_FALCON_CPUCTL, 0);
     IODelay(100);
-
-    uint32_t cpuctl = readReg(NV_PSEC_FALCON_CPUCTL);
-    if (!(cpuctl & FALCON_CPUCTL_HALTED)) {
-        IOLog("NVDAAL-GSP: SEC2 not halted after reset\n");
+    
+    // Check RISC-V status
+    cpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+    IOLog("NVDAAL-GSP: SEC2 RISCV_CPUCTL after reset: 0x%08x\n", cpuctl);
+    
+    // RISC-V CPUCTL bit 4 = halted
+    if (!(cpuctl & 0x10)) {
+        IOLog("NVDAAL-GSP: SEC2 RISC-V not halted, trying RISC-V halt\n");
+        // Try to halt via RISC-V control
+        writeReg(NV_PSEC_RISCV_CPUCTL, cpuctl | 0x10);
+        IODelay(100);
+        cpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+        IOLog("NVDAAL-GSP: SEC2 RISCV_CPUCTL after halt: 0x%08x\n", cpuctl);
     }
 
-    return true;
+    return (cpuctl & 0x10) != 0;  // Return true if halted
 }
 
 bool NVDAALGsp::checkWpr2Setup(void) {
@@ -861,21 +1324,13 @@ bool NVDAALGsp::executeFwsecFrts(void) {
     IOLog("NVDAAL-GSP: Executing FWSEC-FRTS...\n");
 
     // First, check if WPR2 is already set up (by EFI/GOP/VBIOS POST)
-    // Read WPR2 registers directly
     uint32_t wpr2HiReg = readReg(NV_PFB_PRI_MMU_WPR2_ADDR_HI);
     uint32_t wpr2LoReg = readReg(NV_PFB_PRI_MMU_WPR2_ADDR_LO);
     IOLog("NVDAAL-GSP: WPR2 registers: HI=0x%08x LO=0x%08x\n", wpr2HiReg, wpr2LoReg);
-    
+
     if (checkWpr2Setup()) {
         IOLog("NVDAAL-GSP: WPR2 already configured by EFI/VBIOS!\n");
         return true;
-    }
-
-    // WPR2 not set up - try to use bootloader if available
-    if (bootloaderMem) {
-        IOLog("NVDAAL-GSP: Trying bootloader-based WPR2 setup...\n");
-        // The bootloader may be able to set up WPR2
-        // For now, continue without FWSEC
     }
 
     if (!fwsecMem) {
@@ -900,6 +1355,61 @@ bool NVDAALGsp::executeFwsecFrts(void) {
         IOLog("NVDAAL-GSP: FWSEC ucode not found in VBIOS\n");
         return false;
     }
+
+    // ========================================================================
+    // METHOD 1: Try Boot ROM Interface (DMA-based, HS mode)
+    // This is the preferred method as it allows signature verification
+    // ========================================================================
+    IOLog("NVDAAL-GSP: *** METHOD 1: Boot ROM Interface ***\n");
+
+    if (fwsecInfo.storedSize > 0 && fwsecPhys != 0) {
+        IOLog("NVDAAL-GSP: Trying Boot ROM interface with FWSEC (size=%u)...\n",
+              fwsecInfo.storedSize);
+
+        if (executeFwsecViaBrom()) {
+            IOLog("NVDAAL-GSP: Boot ROM method succeeded!\n");
+            return true;
+        }
+        IOLog("NVDAAL-GSP: Boot ROM method failed, trying DMA method...\n");
+    } else {
+        IOLog("NVDAAL-GSP: StoredSize not available (0x%x), skipping BROM\n",
+              fwsecInfo.storedSize);
+    }
+
+    // ========================================================================
+    // METHOD 2: DMA Loading (Boot ROM can still verify via FBIF)
+    // ========================================================================
+    IOLog("NVDAAL-GSP: *** METHOD 2: DMA Loading ***\n");
+
+    if (fwsecPhys != 0 && fwsecInfo.storedSize > 0) {
+        // Calculate physical address of FWSEC within VBIOS buffer
+        uint64_t fwsecFwPhys = fwsecPhys + fwsecInfo.fwOffset;
+        IOLog("NVDAAL-GSP: Trying DMA-based FWSEC loading at phys 0x%llx...\n", fwsecFwPhys);
+
+        if (loadFalconUcodeDma(NV_PGSP_BASE, fwsecMem, fwsecFwPhys,
+                               fwsecInfo.storedSize, fwsecInfo.bootVec)) {
+            // Wait for completion
+            for (int i = 0; i < 1000; i++) {
+                uint32_t cpuctl = readReg(NV_PGSP_FALCON_CPUCTL);
+                if (cpuctl & FALCON_CPUCTL_HALTED) {
+                    IOLog("NVDAAL-GSP: DMA FWSEC halted, checking WPR2...\n");
+                    if (checkWpr2Setup()) {
+                        IOLog("NVDAAL-GSP: DMA method succeeded!\n");
+                        return true;
+                    }
+                    break;
+                }
+                IODelay(1000);
+            }
+        }
+        IOLog("NVDAAL-GSP: DMA method failed, trying PIO method...\n");
+    }
+
+    // ========================================================================
+    // METHOD 3: PIO Loading (Last resort - will fail HS signature check)
+    // ========================================================================
+    IOLog("NVDAAL-GSP: *** METHOD 3: PIO Loading (last resort) ***\n");
+    IOLog("NVDAAL-GSP: Warning: PIO bypasses Boot ROM, signature won't be verified\n");
 
     // Step 1: Reset GSP Falcon
     IOLog("NVDAAL-GSP: Resetting GSP Falcon for FWSEC...\n");
@@ -985,8 +1495,8 @@ bool NVDAALGsp::executeFwsecFrts(void) {
 }
 
 bool NVDAALGsp::executeBooterLoad(void) {
-    // Execute booter_load on SEC2 to authenticate and load GSP-RM
-    // Booter runs in Heavy-Secure mode on SEC2 FALCON
+    // Execute booter_load on SEC2 (Ada Lovelace)
+    // Booter authenticates and loads GSP-RM into WPR2
 
     IOLog("NVDAAL-GSP: Executing booter_load on SEC2...\n");
 
@@ -995,63 +1505,100 @@ bool NVDAALGsp::executeBooterLoad(void) {
         return false;
     }
 
-    // Reset SEC2
-    writeReg(NV_PSEC_FALCON_CPUCTL, 0);
-    IODelay(100);
-
-    // The booter firmware has a header that describes IMEM/DMEM layout
-    // For now, we'll try a simplified approach
-
-    const uint8_t *booterData = (const uint8_t *)booterLoadMem->getBytesNoCopy();
     size_t booterSize = booterLoadMem->getLength();
-
-    // Read booter header (simplified - real format is more complex)
-    // The actual format includes HS header, code/data offsets, signatures
     if (booterSize < 256) {
         IOLog("NVDAAL-GSP: booter_load too small\n");
         return false;
     }
 
-    IOLog("NVDAAL-GSP: booter_load size: %lu bytes\n", (unsigned long)booterSize);
+    IOLog("NVDAAL-GSP: booter_load size: %lu bytes @ phys 0x%llx\n", 
+          (unsigned long)booterSize, booterLoadPhys);
 
-    // Setup mailbox with WPR meta address for booter
+    // Diagnostic: Read SEC2 hardware config
+    uint32_t hwcfg = readReg(NV_PSEC_FALCON_HWCFG);
+    uint32_t falconCpuctl = readReg(NV_PSEC_FALCON_CPUCTL);
+    uint32_t riscvCpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+    IOLog("NVDAAL-GSP: SEC2 HWCFG=0x%08x FALCON_CPUCTL=0x%08x RISCV_CPUCTL=0x%08x\n",
+          hwcfg, falconCpuctl, riscvCpuctl);
+    
+    // HWCFG bits: [3:0]=IMEM_SIZE, [7:4]=DMEM_SIZE, [8]=RISCV
+    bool isRiscv = (hwcfg >> 8) & 1;
+    IOLog("NVDAAL-GSP: SEC2 is %s core\n", isRiscv ? "RISC-V" : "Falcon");
+
+    // Read current SEC2 RISC-V state
+    uint32_t cpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+    IOLog("NVDAAL-GSP: SEC2 RISCV_CPUCTL initial: 0x%08x\n", cpuctl);
+
+    // For RISC-V SEC2, we use the BCR (Boot Config Region) mechanism
+    // The booter firmware address goes into BCR_DMEM_ADDR
+    // BCR_CTRL triggers the boot
+    
+    // Setup WPR meta address in Falcon mailboxes (booter reads these)
     uint32_t mailbox0 = (uint32_t)(wprMetaPhys & 0xFFFFFFFF);
     uint32_t mailbox1 = (uint32_t)(wprMetaPhys >> 32);
-
     writeReg(NV_PSEC_FALCON_MAILBOX0, mailbox0);
     writeReg(NV_PSEC_FALCON_MAILBOX1, mailbox1);
+    IOLog("NVDAAL-GSP: SEC2 mailbox set to WPR meta @ 0x%llx\n", wprMetaPhys);
 
-    // Configure DMA base for booter code
-    writeReg(NV_PSEC_FALCON_DMATRFBASE, (uint32_t)(booterLoadPhys >> 8));
+    // Also set GSP firmware info in additional mailboxes if available
+    // Mailbox format: [0]=wprMeta_lo, [1]=wprMeta_hi, [2]=gspFw_lo, [3]=gspFw_hi
+    
+    // Configure BCR for RISC-V boot
+    // BCR_DMEM_ADDR = physical address of booter >> 8 (256-byte aligned)
+    uint32_t bcrDmemAddr = (uint32_t)(booterLoadPhys >> 8);
+    writeReg(NV_PSEC_RISCV_BCR_DMEM_ADDR, bcrDmemAddr);
+    IOLog("NVDAAL-GSP: SEC2 BCR_DMEM_ADDR = 0x%08x\n", bcrDmemAddr);
 
-    // For proper boot, we need to:
-    // 1. Load IMEM (instruction memory)
-    // 2. Load DMEM (data memory)
-    // 3. Set boot vector
-    // 4. Start CPU
+    // BCR_CTRL: bit 0 = trigger boot, bits 31:8 = boot config
+    // For HS (Heavy Secure) boot: typically just set bit 0
+    uint32_t bcrCtrl = readReg(NV_PSEC_RISCV_BCR_CTRL);
+    IOLog("NVDAAL-GSP: SEC2 BCR_CTRL before: 0x%08x\n", bcrCtrl);
+    
+    // Set BCR_CTRL to trigger boot (bit 0 = 1)
+    writeReg(NV_PSEC_RISCV_BCR_CTRL, bcrDmemAddr | 0x1);
+    IOLog("NVDAAL-GSP: SEC2 BCR_CTRL set to: 0x%08x\n", bcrDmemAddr | 0x1);
 
-    // Simplified: try to start SEC2 and see what happens
-    writeReg(NV_PSEC_FALCON_BOOTVEC, 0);  // Boot at offset 0
-    writeReg(NV_PSEC_FALCON_CPUCTL, FALCON_CPUCTL_STARTCPU);
+    // Start the RISC-V core
+    // CPUCTL: bit 1 = start CPU
+    cpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+    writeReg(NV_PSEC_RISCV_CPUCTL, cpuctl | 0x2);  // Set START bit
+    IOLog("NVDAAL-GSP: SEC2 RISCV start command sent\n");
 
-    // Wait for SEC2 to finish
-    for (int i = 0; i < 100; i++) {
-        uint32_t cpuctl = readReg(NV_PSEC_FALCON_CPUCTL);
-        if (cpuctl & FALCON_CPUCTL_HALTED) {
-            // Check mailbox for status
+    // Wait for SEC2 to finish (halted or mailbox response)
+    for (int i = 0; i < 200; i++) {  // 200ms timeout
+        cpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+        
+        // Check if halted (bit 4) or check mailbox
+        if (cpuctl & 0x10) {
+            // Check return code
+            uint32_t retcode = readReg(NV_PSEC_RISCV_BR_RETCODE);
             uint32_t result = readReg(NV_PSEC_FALCON_MAILBOX0);
-            IOLog("NVDAAL-GSP: SEC2 halted, mailbox0=0x%08x\n", result);
+            IOLog("NVDAAL-GSP: SEC2 halted, CPUCTL=0x%08x RETCODE=0x%08x MB0=0x%08x\n", 
+                  cpuctl, retcode, result);
 
-            if (result == 0) {
+            if (retcode == 0 || result == 0) {
                 IOLog("NVDAAL-GSP: booter_load completed successfully\n");
                 return true;
             } else {
-                IOLog("NVDAAL-GSP: booter_load failed with error 0x%x\n", result);
+                IOLog("NVDAAL-GSP: booter_load failed: retcode=0x%x mb0=0x%x\n", retcode, result);
                 return false;
             }
         }
+        
+        // Check if still starting
+        if (i == 10) {
+            IOLog("NVDAAL-GSP: SEC2 still running, CPUCTL=0x%08x\n", cpuctl);
+        }
+        
         IODelay(1000);  // 1ms
     }
+
+    // Final state dump
+    cpuctl = readReg(NV_PSEC_RISCV_CPUCTL);
+    uint32_t retcode = readReg(NV_PSEC_RISCV_BR_RETCODE);
+    uint32_t bcrCtrlFinal = readReg(NV_PSEC_RISCV_BCR_CTRL);
+    IOLog("NVDAAL-GSP: SEC2 timeout: CPUCTL=0x%08x RETCODE=0x%08x BCR=0x%08x\n", 
+          cpuctl, retcode, bcrCtrlFinal);
 
     IOLog("NVDAAL-GSP: Timeout waiting for SEC2/booter\n");
     return false;
