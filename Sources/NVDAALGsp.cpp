@@ -1949,141 +1949,124 @@ bool NVDAALGsp::executeFwsecFrts(void) {
         return false;
     }
 
-    // Try Boot ROM interface (preferred - allows signature verification)
-    if (fwsecInfo.storedSize > 0 && fwsecPhys != 0) {
-        IOLog("NVDAAL-GSP: Trying Boot ROM interface (size=%u)...\n", fwsecInfo.storedSize);
-        if (executeFwsecViaBrom()) {
-            IOLog("NVDAAL-GSP: Boot ROM method succeeded!\n");
+    // === Method 1: BROM HS DMA (preferred - matches NVIDIA GA102 path) ===
+    // Uses DMA to load IMEM/DMEM with SEC bit, then BROM verifies + executes
+    IOLog("NVDAAL-GSP: Method 1: BROM HS DMA execution...\n");
+    if (executeFwsecViaBrom()) {
+        IOLog("NVDAAL-GSP: BROM HS DMA method succeeded!\n");
+        return true;
+    }
+
+    // === Method 2: PIO + BROM HS (fallback - PIO load, BROM verify) ===
+    IOLog("NVDAAL-GSP: Method 2: PIO + BROM HS mode...\n");
+    {
+        const uint32_t falconBase = NV_PGSP_BASE;
+        const void *imem = vbiosData + fwsecInfo.imemOffset;
+
+        if (fwsecInfo.imemOffset + fwsecInfo.imemSize > vbiosSize ||
+            fwsecInfo.dmemOffset + fwsecInfo.dmemSize > vbiosSize) {
+            IOLog("NVDAAL-GSP: Invalid FWSEC offsets\n");
+            return false;
+        }
+
+        // Prepare patched DMEM
+        uint8_t *dmemCopy = (uint8_t *)IOMalloc(fwsecInfo.dmemSize);
+        if (!dmemCopy) {
+            IOLog("NVDAAL-GSP: Failed to allocate DMEM copy\n");
+            return false;
+        }
+        memcpy(dmemCopy, vbiosData + fwsecInfo.dmemOffset, fwsecInfo.dmemSize);
+
+        // Patch signature
+        if (fwsecInfo.signatureCount > 0 && fwsecInfo.pkcDataOffset > 0) {
+            patchFwsecSignature(dmemCopy, fwsecInfo.dmemSize);
+        }
+
+        // Patch FRTS command
+        uint64_t frtsOffset = 0;
+        if (!patchFrtsCmdBuffer(dmemCopy, fwsecInfo.dmemSize, frtsOffset)) {
+            if (fwsecInfo.dmemMapperOffset > 0 &&
+                fwsecInfo.dmemMapperOffset + sizeof(DmemMapperHeader) <= fwsecInfo.dmemSize) {
+                DmemMapperHeader *mapper = (DmemMapperHeader *)(dmemCopy + fwsecInfo.dmemMapperOffset);
+                mapper->initCmd = DMEMMAPPER_CMD_FRTS;
+            }
+        }
+
+        // Engine reset (GA102 sequence)
+        for (int i = 0; i < 150; i++) {
+            if (readReg(falconBase + FALCON_HWCFG2) & FALCON_HWCFG2_RESET_READY) break;
+            IODelay(1);
+        }
+        writeReg(falconBase + FALCON_ENGINE, 1);
+        for (int i = 0; i < 10; i++) readReg(falconBase + FALCON_ENGINE);
+        writeReg(falconBase + FALCON_ENGINE, 0);
+        for (int i = 0; i < 10; i++) readReg(falconBase + FALCON_ENGINE);
+
+        // Wait for scrub (HWCFG2 bit 12)
+        for (int i = 0; i < 50000; i++) {
+            if (!(readReg(falconBase + FALCON_HWCFG2) & FALCON_HWCFG2_MEM_SCRUBBING)) break;
+            IODelay(1);
+        }
+
+        // Switch to Falcon core
+        writeReg(falconBase + FALCON_BCR_CTRL, 0);
+        for (int i = 0; i < 10000; i++) {
+            IODelay(1);
+            if (readReg(falconBase + FALCON_BCR_CTRL) & FALCON_BCR_CTRL_VALID) break;
+        }
+
+        // Set RM register
+        writeReg(falconBase + FALCON_RM, readReg(NV_PMC_BOOT_0));
+
+        // DisableCtxReq
+        uint32_t fbifCtl = readReg(falconBase + FALCON_FBIF_CTL);
+        fbifCtl |= FALCON_FBIF_CTL_ALLOW_PHYS_NO_CTX;
+        writeReg(falconBase + FALCON_FBIF_CTL, fbifCtl);
+        writeReg(falconBase + FALCON_DMACTL, 0);
+
+        // Configure TRANSCFG
+        uint32_t transcfg = readReg(falconBase + FALCON_FBIF_TRANSCFG(0));
+        transcfg &= ~0x07;
+        transcfg |= FALCON_TRANSCFG_TARGET_COHERENT | (1 << 2);
+        writeReg(falconBase + FALCON_FBIF_TRANSCFG(0), transcfg);
+
+        // PIO load with SECURE+tags
+        loadFalconUcode(falconBase, imem, fwsecInfo.imemSize, dmemCopy, fwsecInfo.dmemSize);
+        IOFree(dmemCopy, fwsecInfo.dmemSize);
+
+        // Set BROM parameters
+        writeReg(falconBase + FALCON_BROM_PARAADDR, fwsecInfo.pkcDataOffset);
+        writeReg(falconBase + FALCON_BROM_ENGIDMASK, fwsecInfo.signatureVersions);
+        writeReg(falconBase + FALCON_BROM_CURR_UCODE_ID, fwsecInfo.ucodeId);
+        writeReg(falconBase + FALCON_BROM_MOD_SEL, 1);
+
+        // Set boot vector
+        writeReg(falconBase + FALCON_BOOTVEC, fwsecInfo.bootVec);
+
+        // Start via CPUCTL_ALIAS (HS mode)
+        IOLog("NVDAAL-GSP: Starting Falcon via CPUCTL_ALIAS...\n");
+        writeReg(falconBase + FALCON_CPUCTL_ALIAS, FALCON_CPUCTL_STARTCPU);
+
+        // Wait for halt
+        bool halted = false;
+        for (int i = 0; i < 5000; i++) {
+            uint32_t cpuctl = readReg(falconBase + FALCON_CPUCTL);
+            if (cpuctl & FALCON_CPUCTL_HALTED) {
+                uint32_t mbox0 = readReg(falconBase + FALCON_MAILBOX0);
+                IOLog("NVDAAL-GSP: Falcon halted: CPUCTL=0x%08x MBOX0=0x%08x\n", cpuctl, mbox0);
+                halted = true;
+                break;
+            }
+            IODelay(1000);
+        }
+
+        if (halted && checkWpr2Setup()) {
+            IOLog("NVDAAL-GSP: PIO+BROM HS method succeeded!\n");
             return true;
         }
     }
 
-    // Try DMA loading
-    if (fwsecPhys != 0 && fwsecInfo.storedSize > 0) {
-        uint64_t fwsecFwPhys = fwsecPhys + fwsecInfo.fwOffset;
-        IOLog("NVDAAL-GSP: Trying DMA loading at phys 0x%llx...\n", fwsecFwPhys);
-
-        if (loadFalconUcodeDma(NV_PGSP_BASE, fwsecMem, fwsecFwPhys,
-                               fwsecInfo.storedSize, fwsecInfo.bootVec)) {
-            for (int i = 0; i < 1000; i++) {
-                uint32_t cpuctl = readReg(NV_PGSP_FALCON_CPUCTL);
-                if (cpuctl & FALCON_CPUCTL_HALTED) {
-                    if (checkWpr2Setup()) {
-                        IOLog("NVDAAL-GSP: DMA method succeeded!\n");
-                        return true;
-                    }
-                    break;
-                }
-                IODelay(1000);
-            }
-        }
-    }
-
-    // PIO Loading (last resort - may fail HS signature check)
-    IOLog("NVDAAL-GSP: Trying PIO loading (last resort)...\n");
-
-    // Step 1: Reset GSP Falcon
-    IOLog("NVDAAL-GSP: Resetting GSP Falcon for FWSEC...\n");
-    writeReg(NV_PGSP_FALCON_CPUCTL, 0);
-    IODelay(100);
-
-    // Step 2: Load FWSEC IMEM and DMEM into GSP Falcon
-    const void *imem = vbiosData + fwsecInfo.imemOffset;
-    const void *dmem = vbiosData + fwsecInfo.dmemOffset;
-
-    // Validate offsets
-    if (fwsecInfo.imemOffset + fwsecInfo.imemSize > vbiosSize ||
-        fwsecInfo.dmemOffset + fwsecInfo.dmemSize > vbiosSize) {
-        IOLog("NVDAAL-GSP: Invalid FWSEC offsets\n");
-        return false;
-    }
-
-    // Make a copy of DMEM to patch DMEMMAPPER
-    uint8_t *dmemCopy = (uint8_t *)IOMalloc(fwsecInfo.dmemSize);
-    if (!dmemCopy) {
-        IOLog("NVDAAL-GSP: Failed to allocate DMEM copy\n");
-        return false;
-    }
-    memcpy(dmemCopy, dmem, fwsecInfo.dmemSize);
-
-    // Step 3: Patch RSA signature into DMEM (required for HS mode verification)
-    // This must be done BEFORE loading ucode as Boot ROM verifies signature
-    if (fwsecInfo.signatureCount > 0 && fwsecInfo.pkcDataOffset > 0) {
-        IOLog("NVDAAL-GSP: Patching FWSEC signature...\n");
-        if (!patchFwsecSignature(dmemCopy, fwsecInfo.dmemSize)) {
-            IOLog("NVDAAL-GSP: Warning: Failed to patch FWSEC signature\n");
-            // Continue anyway - FWSEC may still work with pre-patched signature
-        }
-    } else {
-        IOLog("NVDAAL-GSP: No signature info available (count=%d, pkcOff=0x%x)\n",
-              fwsecInfo.signatureCount, fwsecInfo.pkcDataOffset);
-    }
-
-    // Step 4: Patch FRTS command buffer in DMEMMAPPER
-    // Calculate FRTS offset at top of FB minus GSP_HEAP_SIZE minus FRTS_SIZE
-    // For 24GB VRAM: 0x600000000 - 0x8100000 - 0x100000 = ~0x5F7E00000
-    // But we use 0 here and let FWSEC figure it out from FB size
-    uint64_t frtsOffset = 0;  // FWSEC will compute actual offset based on FB size
-
-    if (!patchFrtsCmdBuffer(dmemCopy, fwsecInfo.dmemSize, frtsOffset)) {
-        IOLog("NVDAAL-GSP: Warning: Failed to patch FRTS cmd buffer, trying legacy method\n");
-
-        // Fallback: Try legacy DMEMMAPPER patch
-        if (fwsecInfo.dmemMapperOffset > 0 &&
-            fwsecInfo.dmemMapperOffset + sizeof(DmemMapperHeader) <= fwsecInfo.dmemSize) {
-            DmemMapperHeader *mapper = (DmemMapperHeader *)(dmemCopy + fwsecInfo.dmemMapperOffset);
-            IOLog("NVDAAL-GSP: Legacy patch DMEMMAPPER: old initCmd=0x%x\n", mapper->initCmd);
-            mapper->initCmd = DMEMMAPPER_CMD_FRTS;  // 0x15
-            IOLog("NVDAAL-GSP: Legacy patch DMEMMAPPER: new initCmd=0x%x\n", mapper->initCmd);
-        } else {
-            IOLog("NVDAAL-GSP: Warning: DMEMMAPPER not found, using DMEM as-is\n");
-        }
-    }
-
-    // Step 4: Load ucode into GSP Falcon
-    if (!loadFalconUcode(NV_PGSP_BASE, imem, fwsecInfo.imemSize, dmemCopy, fwsecInfo.dmemSize)) {
-        IOFree(dmemCopy, fwsecInfo.dmemSize);
-        IOLog("NVDAAL-GSP: Failed to load FWSEC ucode\n");
-        return false;
-    }
-
-    IOFree(dmemCopy, fwsecInfo.dmemSize);
-
-    // Step 5: Set boot vector and start Falcon
-    IOLog("NVDAAL-GSP: Starting FWSEC at boot vector 0x%x\n", fwsecInfo.bootVec);
-    writeReg(NV_PGSP_BASE + FALCON_BOOTVEC, fwsecInfo.bootVec);
-    writeReg(NV_PGSP_FALCON_CPUCTL, FALCON_CPUCTL_STARTCPU);
-
-    // Step 6: Wait for FWSEC completion
-    IOLog("NVDAAL-GSP: Waiting for FWSEC completion...\n");
-    for (int i = 0; i < 1000; i++) {  // 1 second timeout
-        uint32_t cpuctl = readReg(NV_PGSP_FALCON_CPUCTL);
-        uint32_t scratch0e = readReg(NV_PBUS_SW_SCRATCH_0E);
-        
-        if (cpuctl & FALCON_CPUCTL_HALTED) {
-            IOLog("NVDAAL-GSP: FWSEC halted, scratch0e=0x%08x\n", scratch0e);
-            
-            // Check for errors
-            if (scratch0e != 0 && scratch0e != 0xFFFFFFFF) {
-                IOLog("NVDAAL-GSP: FWSEC error: 0x%08x\n", scratch0e);
-            }
-            break;
-        }
-        
-        if (i == 100 || i == 500) {
-            IOLog("NVDAAL-GSP: FWSEC still running... cpuctl=0x%08x\n", cpuctl);
-        }
-        
-        IODelay(1000);  // 1ms
-    }
-
-    // Step 7: Check if WPR2 is now set up
-    if (checkWpr2Setup()) {
-        IOLog("NVDAAL-GSP: FWSEC-FRTS completed: WPR2 configured!\n");
-        return true;
-    }
-
-    IOLog("NVDAAL-GSP: FWSEC-FRTS: WPR2 still not configured\n");
+    IOLog("NVDAAL-GSP: FWSEC-FRTS: all methods failed, WPR2 not configured\n");
     return false;
 }
 
