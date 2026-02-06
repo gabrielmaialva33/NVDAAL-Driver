@@ -623,3 +623,137 @@ bool NVDAAL::getStatus(GpuStatus *status) {
 
     return true;
 }
+
+// ============================================================================
+// ACPI/SSDT Property Reading (Linux-compat mode)
+// ============================================================================
+
+bool NVDAAL::readAcpiProperties(void) {
+    if (!pciDevice) {
+        return false;
+    }
+
+    // Check if NVDAAL SSDT properties are present
+    // The SSDT _DSM (UUID a0b5b7c6-...) injects these into IORegistry
+    OSObject *compatible = pciDevice->getProperty("nvdaal-compatible");
+    if (!compatible) {
+        // No NVDAAL SSDT properties found
+        return false;
+    }
+
+    IOLog("NVDAAL: Found ACPI/SSDT properties (Linux-compat mode)\n");
+
+    // ========================================================================
+    // Read boot hints from SSDT _DSM Function 5
+    // ========================================================================
+
+    // nvdaal-boot-mode: "linux-compat" enables Linux-like behavior
+    OSString *bootMode = OSDynamicCast(OSString, pciDevice->getProperty("nvdaal-boot-mode"));
+    if (bootMode && bootMode->isEqualTo("linux-compat")) {
+        linuxCompatMode = true;
+    }
+
+    // gsp-warm-boot: Skip full GSP init if WPR2 already set
+    OSNumber *warmBoot = OSDynamicCast(OSNumber, pciDevice->getProperty("gsp-warm-boot"));
+    if (warmBoot) {
+        gspWarmBoot = warmBoot->unsigned8BitValue() != 0;
+    }
+
+    // skip-display-init: Skip display engine initialization
+    OSNumber *skipDisp = OSDynamicCast(OSNumber, pciDevice->getProperty("skip-display-init"));
+    if (skipDisp) {
+        skipDisplayInit = skipDisp->unsigned8BitValue() != 0;
+    }
+
+    // fwsec-already-run: FWSEC already executed by UEFI
+    OSNumber *fwsecDone = OSDynamicCast(OSNumber, pciDevice->getProperty("fwsec-already-run"));
+    if (fwsecDone) {
+        fwsecAlreadyRun = fwsecDone->unsigned8BitValue() != 0;
+    }
+
+    // prefer-pio-load: Use PIO (not DMA) for firmware loading
+    OSNumber *pioLoad = OSDynamicCast(OSNumber, pciDevice->getProperty("prefer-pio-load"));
+    if (pioLoad) {
+        preferPioLoad = pioLoad->unsigned8BitValue() != 0;
+    }
+
+    // debug-level: 0=off, 1=basic, 2=verbose, 3=trace
+    OSNumber *debugLvl = OSDynamicCast(OSNumber, pciDevice->getProperty("debug-level"));
+    if (debugLvl) {
+        debugLevel = debugLvl->unsigned8BitValue();
+    }
+
+    // ========================================================================
+    // Read hardware parameters from SSDT _DSM Functions 1-4
+    // These are validated against detected values for sanity checking
+    // ========================================================================
+
+    // arch-id: Architecture ID (should match chipArch)
+    OSNumber *archId = OSDynamicCast(OSNumber, pciDevice->getProperty("arch-id"));
+    if (archId) {
+        ssdtArchId = archId->unsigned32BitValue();
+    }
+
+    // vram-usable: Usable VRAM (after WPR2 reservation)
+    OSData *vramData = OSDynamicCast(OSData, pciDevice->getProperty("vram-usable"));
+    if (vramData && vramData->getLength() >= 8) {
+        const uint8_t *bytes = (const uint8_t *)vramData->getBytesNoCopy();
+        // Little-endian 64-bit value
+        ssdtVramUsable = ((uint64_t)bytes[0]) |
+                         ((uint64_t)bytes[1] << 8) |
+                         ((uint64_t)bytes[2] << 16) |
+                         ((uint64_t)bytes[3] << 24) |
+                         ((uint64_t)bytes[4] << 32) |
+                         ((uint64_t)bytes[5] << 40) |
+                         ((uint64_t)bytes[6] << 48) |
+                         ((uint64_t)bytes[7] << 56);
+    }
+
+    // gsp-falcon-base: GSP Falcon register base
+    OSNumber *gspBase = OSDynamicCast(OSNumber, pciDevice->getProperty("gsp-falcon-base"));
+    if (gspBase) {
+        ssdtGspFalconBase = gspBase->unsigned32BitValue();
+    }
+
+    // sec2-falcon-base: SEC2 Falcon register base
+    OSNumber *sec2Base = OSDynamicCast(OSNumber, pciDevice->getProperty("sec2-falcon-base"));
+    if (sec2Base) {
+        ssdtSec2FalconBase = sec2Base->unsigned32BitValue();
+    }
+
+    return true;
+}
+
+void NVDAAL::logAcpiProperties(void) {
+    IOLog("NVDAAL: ========================================\n");
+    IOLog("NVDAAL: ACPI/SSDT Properties (Linux-compat)\n");
+    IOLog("NVDAAL: ========================================\n");
+    IOLog("NVDAAL: Boot Mode: %s\n", linuxCompatMode ? "linux-compat" : "default");
+    IOLog("NVDAAL: GSP Warm Boot: %s\n", gspWarmBoot ? "yes" : "no");
+    IOLog("NVDAAL: Skip Display Init: %s\n", skipDisplayInit ? "yes" : "no");
+    IOLog("NVDAAL: FWSEC Already Run: %s\n", fwsecAlreadyRun ? "yes" : "no");
+    IOLog("NVDAAL: Prefer PIO Load: %s\n", preferPioLoad ? "yes" : "no");
+    IOLog("NVDAAL: Debug Level: %u\n", debugLevel);
+
+    if (ssdtArchId != 0) {
+        IOLog("NVDAAL: SSDT arch-id: 0x%04x (detected: 0x%02x)\n", ssdtArchId, chipArch);
+        if ((ssdtArchId >> 4) != chipArch) {
+            IOLog("NVDAAL: WARNING: SSDT arch-id mismatch!\n");
+        }
+    }
+
+    if (ssdtVramUsable != 0) {
+        IOLog("NVDAAL: SSDT vram-usable: 0x%llx (%llu GB)\n",
+              ssdtVramUsable, ssdtVramUsable / (1024ULL * 1024 * 1024));
+    }
+
+    if (ssdtGspFalconBase != 0) {
+        IOLog("NVDAAL: SSDT gsp-falcon-base: 0x%08x\n", ssdtGspFalconBase);
+    }
+
+    if (ssdtSec2FalconBase != 0) {
+        IOLog("NVDAAL: SSDT sec2-falcon-base: 0x%08x\n", ssdtSec2FalconBase);
+    }
+
+    IOLog("NVDAAL: ========================================\n");
+}
