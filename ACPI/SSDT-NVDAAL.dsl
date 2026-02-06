@@ -45,7 +45,7 @@ DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00020000)
                 // Function 0: Supported function bitmap
                 If (LEqual (Arg2, Zero))
                 {
-                    Return (Buffer (One) { 0x1F })  // Functions 0-4 supported
+                    Return (Buffer (One) { 0x3F })  // Functions 0-5 supported
                 }
 
                 // Function 1: Device identification
@@ -119,6 +119,28 @@ DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00020000)
                         "fwsec-sb-status-reg", 0x00001454,
                         // GSP firmware version
                         "gsp-fw-version",     "570.144"
+                    })
+                }
+
+                // Function 5: Boot/Initialization Hints (Linux-compat mode)
+                // Configurable hints for kext initialization behavior.
+                // Allows UEFI/bootloader to pass runtime config to the driver.
+                If (LEqual (Arg2, 0x05))
+                {
+                    Return (Package ()
+                    {
+                        // Boot mode: "linux-compat" enables Linux-like behavior
+                        "nvdaal-boot-mode",     "linux-compat",
+                        // GSP warm boot: 1=skip full init if WPR2 already set
+                        "gsp-warm-boot",        One,
+                        // Skip display engine initialization entirely
+                        "skip-display-init",    One,
+                        // FWSEC status: 1=UEFI already ran FWSEC, skip in kext
+                        "fwsec-already-run",    Zero,
+                        // Firmware load method: 1=PIO (safe), 0=DMA (fast)
+                        "prefer-pio-load",      One,
+                        // Debug level: 0=off, 1=basic, 2=verbose, 3=trace
+                        "debug-level",          Zero
                     })
                 }
             }
