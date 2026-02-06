@@ -2730,7 +2730,16 @@ bool NVDAALGsp::sendSystemInfo(void) {
     // ====================================================================
     // Log the macumba summary
     // ====================================================================
-    IOLog("NVDAAL-GSP: === MACUMBA GspSystemInfo ===\n");
+
+    // Check if SSDT specifies Linux-compat mode
+    bool linuxCompatMode = false;
+    OSString *bootMode = OSDynamicCast(OSString, pciDevice->getProperty("nvdaal-boot-mode"));
+    if (bootMode && bootMode->isEqualTo("linux-compat")) {
+        linuxCompatMode = true;
+    }
+
+    IOLog("NVDAAL-GSP: === GspSystemInfo (Linux-compat: %s) ===\n",
+          linuxCompatMode ? "YES (from SSDT)" : "YES (default)");
     IOLog("NVDAAL-GSP:   DeviceID=0x%04x SubDevice=0x%04x Rev=0x%02x\n",
           info.PCIDeviceID, info.PCISubDeviceID, info.PCIRevisionID);
     IOLog("NVDAAL-GSP:   maxUserVa=0x%llx hostPageSize=%llu\n",
@@ -2743,7 +2752,7 @@ bool NVDAALGsp::sendSystemInfo(void) {
           info.bIsUnixHdmiFrlComplianceEnabled, info.isGridBuild);
     IOLog("NVDAAL-GSP:   Chipset=0x%04x FHB=0x%04x:0x%04x\n",
           info.Chipset, info.FHBBusInfo.vendorID, info.FHBBusInfo.deviceID);
-    IOLog("NVDAAL-GSP: ==============================\n");
+    IOLog("NVDAAL-GSP: ==============================================\n");
 
     return sendRpc(NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO, &info, sizeof(info));
 }

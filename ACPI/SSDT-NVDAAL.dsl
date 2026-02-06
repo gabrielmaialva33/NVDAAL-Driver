@@ -232,12 +232,6 @@ DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00020000)
                 // macOS: GPU powered on, kext can start compute
                 // The kext reads this transition from IORegistry
             }
-
-            // Propagate to PCIe root port if method exists
-            If (CondRefOf (\_SB.PC00.PEG2.PPS0))
-            {
-                \_SB.PC00.PEG2.PPS0 ()
-            }
         }
 
         // D3: Low power - safe when no compute queues are active
@@ -250,12 +244,6 @@ DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00020000)
             {
                 // macOS: GPU entering suspend, kext should save state
             }
-
-            // Propagate to PCIe root port if method exists
-            If (CondRefOf (\_SB.PC00.PEG2.PPS3))
-            {
-                \_SB.PC00.PEG2.PPS3 ()
-            }
         }
 
         // ============================================================
@@ -266,7 +254,7 @@ DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00020000)
         // Arg0 = Offset into VBIOS ROM (0 to ~128KB)
         // Arg1 = Length of data to read (max 4096 bytes per call)
 
-        Method (_ROM, 2, NotSerialized)
+        Method (_ROM, 2, Serialized)
         {
             // Maximum ROM size for RTX 4090: ~614KB actual data
             // Legacy VGA ROM region: 0xC0000-0xDFFFF (128KB)
@@ -285,16 +273,11 @@ DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00020000)
                 Local0 = 0x1000
             }
 
-            // Create return buffer
-            Name (RBUF, Buffer (Local0) {})
-
+            // Return empty buffer for compute-only mode
             // Note: Actual implementation would use OperationRegion to map
             // the PCI Expansion ROM BAR or legacy VGA ROM region.
-            // For compute-only driver, this is a stub that returns empty.
-            // If VBIOS access is needed, the kext reads directly via BAR0.
-
-            // Return buffer (empty for compute-only mode)
-            Return (RBUF)
+            // For compute-only driver, the kext reads VBIOS directly via BAR0.
+            Return (Buffer (Local0) {})
         }
 
         Method (_STA, 0, NotSerialized)
