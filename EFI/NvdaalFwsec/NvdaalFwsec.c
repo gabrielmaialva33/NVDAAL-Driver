@@ -57,10 +57,11 @@ FwsecExecuteFrtsFromFile (
 #define NV_PFB_PRI_MMU_WPR2_ADDR_LO     0x001FA824  // Ada (confirmed via nvlddmkm.sys 591.74)
 #define NV_PFB_PRI_MMU_WPR2_ADDR_HI     0x001FA828  // Ada (confirmed via nvlddmkm.sys 591.74)
 
-// GSP Falcon Base (for reading state only, NOT for FWSEC execution)
+// GSP Falcon Base - FWSEC runs here in Heavy-Secure mode
+// Confirmed via nouveau fwsec.c, open-gpu-kernel-modules, nova-core docs
 #define NV_PGSP_BASE                    0x00110000
 
-// SEC2 Falcon Base - FWSEC runs on SEC2, NOT GSP (confirmed via nvlddmkm.sys)
+// SEC2 Falcon Base - Booter load/unload and scrubber run here
 #define NV_PSEC_BASE                    0x00840000
 #define FALCON_IRQSSET                  0x0000
 #define FALCON_IRQSCLR                  0x0004
@@ -2138,8 +2139,8 @@ NvdaalFwsecMain (
     LogPrint (L"\n*** Using scrubber firmware from file ***\n");
 
     // Try PIO method first (more reliable, bypasses DMA issues)
-    // FWSEC runs on SEC2 Falcon (0x840000), NOT GSP (0x110000)
-    LogPrint (L"NVDAAL: Attempting PIO (direct register) on SEC2...\n");
+    // Scrubber runs on SEC2 Falcon (0x840000)
+    LogPrint (L"NVDAAL: Attempting PIO (direct register) scrubber on SEC2...\n");
     Status = ExecuteScrubberViaPio (
       NV_PSEC_BASE,
       mScrubberData,
@@ -2218,8 +2219,10 @@ NvdaalFwsecMain (
     if (FwBlobStart + FwBlobSize <= VbiosSize) {
       LogPrint (L"NVDAAL: Firmware blob at 0x%X (size %u)\n", FwBlobStart, FwBlobSize);
 
+      // FWSEC runs on GSP Falcon (0x110000), NOT SEC2
+      // (Booter/scrubber use SEC2, but FWSEC uses GSP in HS mode)
       Status = ExecuteFwsecViaBrom (
-        NV_PSEC_BASE,
+        NV_PGSP_BASE,
         VbiosData + FwBlobStart,
         FwBlobSize,
         mFwsecInfo.BootVec
