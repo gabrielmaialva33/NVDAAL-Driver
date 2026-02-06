@@ -1,70 +1,134 @@
 /*
  * SSDT-NVDAAL.dsl - ACPI Integration for NVDAAL Compute Driver
  *
- * This SSDT improves integration between the RTX 4090 and the NVDAAL kext:
- * 1. Changes device name from "display" to avoid IONDRVFramebuffer conflict
- * 2. Injects compute-specific properties via _DSM
- * 3. Configures power management for compute workloads
+ * Purpose:
+ *   1. Override PCI class-code to 0x1200 (Processing Accelerator) to prevent
+ *      IONDRVFramebuffer from matching the device on macOS
+ *   2. Inject compute-specific properties via _DSM for NVDAAL kext matching
+ *   3. Disable HDMI Audio function (not needed for compute-only)
+ *   4. Configure power management for sustained compute workloads
  *
- * Target: RTX 4090 (AD102) at \_SB.PC00.PEG2.PEGP
- * Board: ASUS ROG Maximus Z790 Hero
+ * Hardware (confirmed via NVML/NVAPI on live GPU):
+ *   GPU:        NVIDIA GeForce RTX 4090 (AD102-300, arch 0x190, impl 0x2, rev 0xA1)
+ *   Device ID:  0x2684 (NVIDIA), SubSystem: 0x889D1043 (ASUS ROG STRIX)
+ *   VBIOS:      95.02.18.80.87 (ASUS ROG-STRIX-RTX4090-24G-GAMING)
+ *   VRAM:       24 GB GDDR6X (Micron, 384-bit, 10501 MHz)
+ *               Physical: 0x600000000, Usable: 0x5FF400000 (12 MB WPR2 reserved)
+ *   BAR1:       256 MB
+ *   PCIe:       Gen4 x16 (current x8 due to riser/slot)
+ *   CUDA:       Compute 8.9, 16384 cores, max 3105 MHz
+ *   Power:      450W TDP (default), 150W min, 600W max
+ *   Thermal:    99C slowdown, 104C shutdown
+ *
+ * Target: \_SB.PC00.PEG2.PEGP (PCI Bus 2, Device 0, Function 0)
+ * Board:  ASUS ROG Maximus Z790 Hero (Z790 chipset)
+ *
+ * NOTE: Adjust the ACPI path if your GPU is in a different PCIe slot.
+ *       Common paths: PEG0.PEGP (x16 slot 1), PEG1.PEGP (x16 slot 2)
  */
-DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00010000)
+DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00020000)
 {
     External (_SB_.PC00.PEG2, DeviceObj)
     External (_SB_.PC00.PEG2.PEGP, DeviceObj)
 
-    // Rename device from "display" to "compute" for macOS
-    // This prevents IONDRVFramebuffer from matching
     Scope (\_SB.PC00.PEG2.PEGP)
     {
-        // Override the name property
-        // IOKit uses this for matching - changing it avoids IONDRVFramebuffer
         Method (_DSM, 4, NotSerialized)
         {
-            // Check for NVDAAL-specific UUID
-            // UUID: 4E564441-414C-0000-0000-000000000000 ("NVDAAL" in ASCII)
+            // ============================================================
+            // NVDAAL Private _DSM
+            // UUID: 4E564441-414C-0000-0000-000000000000 ("NVDAAL")
+            // Used by the kext to query hardware parameters at runtime.
+            // ============================================================
             If (LEqual (Arg0, ToUUID ("4e564441-414c-0000-0000-000000000000")))
             {
-                // Function 0: Return supported functions bitmap
+                // Function 0: Supported function bitmap
                 If (LEqual (Arg2, Zero))
                 {
-                    Return (Buffer (One) { 0x0F })  // Functions 0-3 supported
+                    Return (Buffer (One) { 0x1F })  // Functions 0-4 supported
                 }
 
-                // Function 1: Return device info
+                // Function 1: Device identification
                 If (LEqual (Arg2, One))
                 {
-                    Return (Package (0x06)
+                    Return (Package ()
                     {
-                        "device-type", "compute",
-                        "gpu-architecture", "ada-lovelace",
-                        "compute-class", Buffer (0x04) { 0x00, 0x00, 0x12, 0x00 }
+                        "device-type",        "compute",
+                        "gpu-architecture",   "ada-lovelace",
+                        "gpu-chip",           "AD102",
+                        "arch-id",            0x0190,             // NV_ARCH_ADA
+                        "impl-id",            0x02,               // AD102
+                        "revision-id",        0xA1,
+                        "pci-device-id",      0x2684,
+                        "pci-subsystem-id",   0x889D1043,         // ASUS ROG STRIX
+                        "cuda-compute",       Buffer (0x02) { 0x08, 0x09 },  // 8.9
+                        "cuda-cores",         0x4000,             // 16384
+                        "vbios-version",      "95.02.18.80.87"
                     })
                 }
 
-                // Function 2: Return VRAM info
+                // Function 2: Memory configuration
                 If (LEqual (Arg2, 0x02))
                 {
-                    Return (Package (0x04)
+                    Return (Package ()
                     {
-                        "vram-size", Buffer (0x08) { 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00 },  // 24GB
-                        "vram-type", "GDDR6X"
+                        // Physical VRAM: 0x600000000 (24 GB)
+                        "vram-total",         Buffer (0x08) { 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00 },
+                        // Usable VRAM: 0x5FF400000 (WPR2 takes 12 MB at top)
+                        "vram-usable",        Buffer (0x08) { 0x00, 0x00, 0x40, 0xFF, 0x05, 0x00, 0x00, 0x00 },
+                        "vram-type",          "GDDR6X",
+                        "vram-bus-width",     0x0180,             // 384-bit
+                        "vram-clock-mhz",     0x2905,             // 10501 MHz
+                        "bar1-size",          0x10000000,         // 256 MB
+                        // WPR2 region: FRTS + GSP-RM carveout at top of VRAM
+                        "wpr2-base",          Buffer (0x08) { 0x00, 0x00, 0x40, 0xFF, 0x05, 0x00, 0x00, 0x00 },
+                        "wpr2-size",          0x00C00000          // 12 MB (0xC00000)
                     })
                 }
 
-                // Function 3: Return power info
+                // Function 3: Power and thermal
                 If (LEqual (Arg2, 0x03))
                 {
-                    Return (Package (0x04)
+                    Return (Package ()
                     {
-                        "tdp-watts", 0x01A4,  // 420W
-                        "power-limit", 0x0258  // 600W max
+                        "tdp-watts",          0x01C2,             // 450W (actual default limit)
+                        "power-min-watts",    0x0096,             // 150W minimum
+                        "power-max-watts",    0x0258,             // 600W maximum
+                        "thermal-slowdown-c", 0x63,               // 99C
+                        "thermal-shutdown-c", 0x68                // 104C
+                    })
+                }
+
+                // Function 4: GSP/Firmware info for kext boot sequence
+                If (LEqual (Arg2, 0x04))
+                {
+                    Return (Package ()
+                    {
+                        // Falcon register bases
+                        "gsp-falcon-base",    0x00110000,         // FWSEC + GSP Falcon
+                        "sec2-falcon-base",   0x00840000,         // Booter + Scrubber
+                        "gsp-riscv-base",     0x00118000,         // GSP RISC-V core
+                        // FWSEC is in VBIOS ROM, extracted via BIT Token 0x70, AppID 0x85
+                        "fwsec-source",       "vbios",
+                        "fwsec-target",       "gsp-falcon",       // NOT SEC2
+                        // WPR2 registers (confirmed for Ada Lovelace)
+                        "wpr2-addr-lo-reg",   0x001FA824,
+                        "wpr2-addr-hi-reg",   0x001FA828,
+                        // FWSEC/FRTS status registers
+                        "frts-status-reg",    0x00001438,
+                        "fwsec-sb-status-reg", 0x00001454,
+                        // GSP firmware version
+                        "gsp-fw-version",     "570.144"
                     })
                 }
             }
 
-            // macOS-specific properties
+            // ============================================================
+            // macOS WhateverGreen/IOKit _DSM
+            // UUID: a0b5b7c6-1318-441c-b0c9-fe695eaf949b
+            // These properties are injected into the IORegistry and read
+            // by IOKit during device matching and kext loading.
+            // ============================================================
             If ((_OSI ("Darwin") && LEqual (Arg0, ToUUID ("a0b5b7c6-1318-441c-b0c9-fe695eaf949b"))))
             {
                 If (LEqual (Arg2, Zero))
@@ -72,101 +136,73 @@ DefinitionBlock ("", "SSDT", 2, "NVDAAL", "RTX4090", 0x00010000)
                     Return (Buffer (One) { 0x03 })
                 }
 
-                Return (Package (0x10)
+                Return (Package ()
                 {
-                    // Prevent IONDRVFramebuffer matching
-                    "class-code", Buffer (0x04) { 0x00, 0x00, 0x12, 0x00 },  // Processing accelerator class
+                    // Override PCI class to Processing Accelerator (0x1200)
+                    // This is the critical property: prevents IONDRVFramebuffer
+                    // from matching, which would panic without a display driver.
+                    // PCI Class 0x12 = Processing Accelerator, Subclass 0x00
+                    "class-code",           Buffer (0x04) { 0x00, 0x00, 0x12, 0x00 },
 
-                    // Device identification
-                    "model", Buffer (0x10) { "NVIDIA RTX 4090" },
-                    "device_type", Buffer (0x08) { "compute" },
+                    // Device identification for IOKit matching
+                    "model",                Buffer () { "NVIDIA GeForce RTX 4090" },
+                    "device_type",          Buffer () { "compute" },
 
-                    // NVDAAL-specific
-                    "nvdaal-compatible", One,
-                    "nvdaal-version", 0x0001,
+                    // NVDAAL kext matching properties
+                    "nvdaal-compatible",    One,
+                    "nvdaal-version",       0x0002,
 
-                    // Disable graphics features
-                    "disable-gfx-ports", One,
-                    "AAPL,no-gfx", One,
+                    // Disable all graphics/display features
+                    "disable-gfx-ports",    One,
+                    "AAPL,no-gfx",          One,
+                    "disable-gpu-wakes",    One,
+                    "force-no-display",     One,
 
-                    // Power management
-                    "pci-aspm-default", Zero  // Disable ASPM for compute workloads
+                    // Disable ASPM (Active State Power Management) for
+                    // sustained compute - avoids latency from L0s/L1 transitions
+                    "pci-aspm-default",     Zero
                 })
             }
 
             Return (Buffer (One) { 0x00 })
         }
 
-        // S0 wake state for compute
+        // D3cold capable - allows full power gating when idle
         Method (_S0W, 0, NotSerialized)
         {
-            Return (0x04)  // D3cold capable
+            Return (0x04)
         }
 
-        // Power state methods
-        Method (_PS0, 0, NotSerialized)  // D0 - Full power
-        {
-            // GPU enters full power state
-            // Compute workloads require full power
-        }
+        // D0: Full power - required for compute workloads
+        Method (_PS0, 0, NotSerialized) {}
 
-        Method (_PS3, 0, NotSerialized)  // D3 - Off
-        {
-            // GPU enters low power state
-            // Safe for idle compute driver
-        }
+        // D3: Low power - safe when no compute queues are active
+        Method (_PS3, 0, NotSerialized) {}
 
-        // Device presence check
         Method (_STA, 0, NotSerialized)
         {
-            If (_OSI ("Darwin"))
-            {
-                Return (0x0F)  // Present, enabled, functioning
-            }
-            Else
-            {
-                Return (0x0F)
-            }
+            Return (0x0F)  // Present + Enabled + Functioning + UI-visible
         }
     }
 
-    // HD Audio device on RTX 4090 (HDAU)
-    // Path: \_SB.PC00.PEG2.PEGP.HDAU (Address 0,1)
+    // ================================================================
+    // HDMI Audio (Function 1) - Disabled for compute-only
+    // The RTX 4090 exposes an HDA controller at PCI function 1.
+    // For compute-only use we disable it to avoid unnecessary probing.
+    // ================================================================
     Scope (\_SB.PC00.PEG2)
     {
         Device (HDAU)
         {
-            Name (_ADR, One)  // Function 1
-
-            Method (_DSM, 4, NotSerialized)
-            {
-                If ((_OSI ("Darwin") && LEqual (Arg0, ToUUID ("a0b5b7c6-1318-441c-b0c9-fe695eaf949b"))))
-                {
-                    If (LEqual (Arg2, Zero))
-                    {
-                        Return (Buffer (One) { 0x03 })
-                    }
-
-                    Return (Package (0x04)
-                    {
-                        "hda-gfx", Buffer (0x0A) { "onboard-2" },
-                        "layout-id", Buffer (0x04) { 0x07, 0x00, 0x00, 0x00 }
-                    })
-                }
-
-                Return (Buffer (One) { 0x00 })
-            }
+            Name (_ADR, One)  // PCI Function 1
 
             Method (_STA, 0, NotSerialized)
             {
                 If (_OSI ("Darwin"))
                 {
-                    Return (0x0F)
+                    Return (Zero)  // Disabled on macOS (not needed for compute)
                 }
-                Else
-                {
-                    Return (Zero)
-                }
+                Return (0x0F)     // Normal on other OSes
             }
         }
     }
