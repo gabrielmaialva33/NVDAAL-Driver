@@ -98,9 +98,52 @@
 #define FALCON_DMEMC(i)                   (0x01C0 + (i) * 8)
 #define FALCON_DMEMD(i)                   (0x01C4 + (i) * 8)
 
+// Additional FALCON registers for HS mode (GA102+)
+#define FALCON_CPUCTL_ALIAS               0x0130  // Alias for CPUCTL (HS mode start)
+#define FALCON_RM                         0x0084  // RM scratch register
+#define FALCON_HWCFG2                     0x00F4  // Hardware config 2
+#define FALCON_ENGINE                     0x03C0  // Engine reset control
+
+// BROM registers (offsets from RISCV register base, 0x1000 above Falcon base)
+// For GSP: absolute = 0x110000 + offset below
+#define FALCON_BROM_MOD_SEL               0x1180  // Algorithm select (1=RSA3K)
+#define FALCON_BROM_CURR_UCODE_ID         0x1198  // Ucode ID for verification
+#define FALCON_BROM_ENGIDMASK             0x119C  // Engine ID mask
+#define FALCON_BROM_PARAADDR              0x1210  // PKC data offset in DMEM
+
+// BCR_CTRL register (RISCV space, offset 0x668 from riscvRegisterBase)
+// For GSP: absolute = 0x110000 + 0x1668 = 0x111668
+#define FALCON_BCR_CTRL                   0x1668
+#define FALCON_BCR_CTRL_VALID             (1 << 0)   // Read-only: core switch valid
+#define FALCON_BCR_CTRL_CORE_SELECT_RISCV (1 << 4)   // Select RISCV core
+// FALCON core: CORE_SELECT = 0 (bit 4 clear)
+
 // FALCON CPUCTL bits
 #define FALCON_CPUCTL_STARTCPU            (1 << 1)
 #define FALCON_CPUCTL_HALTED              (1 << 4)
+#define FALCON_CPUCTL_ALIAS_EN            (1 << 6)   // Enable CPUCTL_ALIAS writes
+
+// FALCON DMACTL bits
+#define FALCON_DMACTL_DMEM_SCRUBBING      (1 << 1)
+#define FALCON_DMACTL_IMEM_SCRUBBING      (1 << 2)
+
+// FALCON HWCFG2 bits
+#define FALCON_HWCFG2_MEM_SCRUBBING       (1 << 12)  // Memory scrub in progress
+#define FALCON_HWCFG2_RESET_READY         (1 << 31)  // Ready for reset
+
+// FALCON IMEMC bits
+#define FALCON_IMEMC_AINCW                (1 << 24)  // Auto-increment on write
+#define FALCON_IMEMC_SECURE               (1 << 28)  // Secure mode load
+
+// FALCON DMEMC bits
+#define FALCON_DMEMC_AINCW                (1 << 24)  // Auto-increment on write
+
+// FALCON IMEM block size
+#define FALCON_IMEM_BLKSIZE2              8           // 2^8 = 256 bytes per block
+#define FALCON_IMEM_WORDS_PER_BLK         ((1U << (FALCON_IMEM_BLKSIZE2 - 2)) - 1)  // 63 (mask)
+
+// DMA transfer SEC bit for IMEM (HS mode)
+#define FALCON_DMATRFCMD_SEC_IMEM         (1 << 2)   // SEC=1 for secure IMEM load
 
 // ============================================================================
 // GSP (GPU System Processor) - RISC-V based

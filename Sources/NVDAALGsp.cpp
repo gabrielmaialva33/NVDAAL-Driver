@@ -981,32 +981,39 @@ bool NVDAALGsp::loadFalconUcode(uint32_t falconBase, const void *imem, size_t im
                                  const void *dmem, size_t dmemSize) {
     const uint32_t *imemData = (const uint32_t *)imem;
     const uint32_t *dmemData = (const uint32_t *)dmem;
-    
+    uint32_t numWords, wordIdx, tag;
+
     IOLog("NVDAAL-GSP: Loading Falcon ucode at 0x%x: IMEM=%lu DMEM=%lu\n",
           falconBase, (unsigned long)imemSize, (unsigned long)dmemSize);
-    
-    // Load IMEM (instruction memory)
-    // Write to IMEMC to set address, then write data via IMEMD
-    for (size_t i = 0; i < imemSize; i += 4) {
-        if ((i % 256) == 0) {
-            // Set IMEM address (block = i/256, auto-increment enabled)
-            uint32_t imemcVal = ((i / 256) << 8) | (1 << 24);  // Auto-increment
-            writeReg(falconBase + FALCON_IMEMC(0), imemcVal);
+
+    // Load IMEM with SECURE bit and IMEM tags (per NVIDIA s_imemCopyTo_TU102)
+    // SECURE bit (28) marks code as HS-loadable, tags enable BROM hash verification
+    numWords = (uint32_t)(imemSize / 4);
+    tag = 0;
+
+    // Set IMEMC: address=0, AINCW=1, SECURE=1
+    writeReg(falconBase + FALCON_IMEMC(0), FALCON_IMEMC_AINCW | FALCON_IMEMC_SECURE);
+
+    for (wordIdx = 0; wordIdx < numWords; wordIdx++) {
+        // Write IMEM tag at every 256-byte (64-word) boundary
+        if ((wordIdx & FALCON_IMEM_WORDS_PER_BLK) == 0) {
+            writeReg(falconBase + FALCON_IMEMT(0), tag);
+            tag++;
         }
-        writeReg(falconBase + FALCON_IMEMD(0), imemData[i / 4]);
+        writeReg(falconBase + FALCON_IMEMD(0), imemData[wordIdx]);
     }
-    
-    // Load DMEM (data memory)
-    for (size_t i = 0; i < dmemSize; i += 4) {
-        if ((i % 256) == 0) {
-            // Set DMEM address
-            uint32_t dmemcVal = ((i / 256) << 8) | (1 << 24);  // Auto-increment
-            writeReg(falconBase + FALCON_DMEMC(0), dmemcVal);
-        }
-        writeReg(falconBase + FALCON_DMEMD(0), dmemData[i / 4]);
+
+    IOLog("NVDAAL-GSP: IMEM loaded: %u words, %u tags\n", numWords, tag);
+
+    // Load DMEM with auto-increment
+    numWords = (uint32_t)(dmemSize / 4);
+    writeReg(falconBase + FALCON_DMEMC(0), FALCON_DMEMC_AINCW);
+
+    for (wordIdx = 0; wordIdx < numWords; wordIdx++) {
+        writeReg(falconBase + FALCON_DMEMD(0), dmemData[wordIdx]);
     }
-    
-    IOLog("NVDAAL-GSP: Falcon ucode loaded\n");
+
+    IOLog("NVDAAL-GSP: DMEM loaded: %u words\n", numWords);
     return true;
 }
 
@@ -1018,156 +1025,285 @@ bool NVDAALGsp::loadFalconUcode(uint32_t falconBase, const void *imem, size_t im
 bool NVDAALGsp::loadFalconUcodeDma(uint32_t falconBase,
                                     IOBufferMemoryDescriptor *fwMem, uint64_t fwPhys,
                                     size_t fwSize, uint32_t bootVec) {
-    IOLog("NVDAAL-GSP: Loading Falcon via DMA: phys=0x%llx size=%lu bootVec=0x%x\n",
-          fwPhys, (unsigned long)fwSize, bootVec);
+    IOLog("NVDAAL-GSP: Loading Falcon via DMA (GA102 HS path): phys=0x%llx size=%lu\n",
+          fwPhys, (unsigned long)fwSize);
 
-    // Step 1: Reset the Falcon engine
-    IOLog("NVDAAL-GSP: Resetting Falcon engine...\n");
-    writeReg(falconBase + FALCON_CPUCTL, 0);
-    IODelay(100);
+    // === Step 1: Engine reset (kflcnResetIntoRiscv_GA102) ===
 
-    // Read hardware config
-    uint32_t hwcfg = readReg(falconBase + FALCON_HWCFG);
-    IOLog("NVDAAL-GSP: HWCFG=0x%08x\n", hwcfg);
-
-    // Step 2: Enable DMA interface
-    IOLog("NVDAAL-GSP: Enabling DMA interface...\n");
-    writeReg(falconBase + FALCON_ITFEN, FALCON_ITFEN_DTFEN);  // Enable DMA transfers
-
-    // Step 3: Configure FBIF for system memory DMA
-    // Target non-coherent system memory (0x5)
-    writeReg(falconBase + FALCON_FBIF_TRANSCFG(0), FALCON_TRANSCFG_TARGET_NON_COHERENT);
-    writeReg(falconBase + FALCON_FBIF_TRANSCFG(1), FALCON_TRANSCFG_TARGET_NON_COHERENT);
-
-    // Allow physical addressing
-    writeReg(falconBase + FALCON_FBIF_CTL,
-             FALCON_FBIF_CTL_ALLOW_PHYS | FALCON_FBIF_CTL_ALLOW_PHYS_NO_CTX);
-
-    // Step 4: Set DMA base address (physical address >> 8)
-    uint32_t dmaBase = (uint32_t)(fwPhys >> 8);
-    uint32_t dmaBase1 = (uint32_t)(fwPhys >> 40);  // High bits for >4GB addresses
-    writeReg(falconBase + FALCON_DMATRFBASE, dmaBase);
-    writeReg(falconBase + FALCON_DMATRFBASE1, dmaBase1);
-    IOLog("NVDAAL-GSP: DMA base set: 0x%08x (hi: 0x%08x)\n", dmaBase, dmaBase1);
-
-    // Verify readback
-    uint32_t readBack = readReg(falconBase + FALCON_DMATRFBASE);
-    if (readBack != dmaBase) {
-        IOLog("NVDAAL-GSP: Warning: DMA base readback mismatch: wrote 0x%08x, read 0x%08x\n",
-              dmaBase, readBack);
+    // PreResetWait: wait for HWCFG2 RESET_READY (bit 31)
+    for (int i = 0; i < 150; i++) {
+        uint32_t hwcfg2 = readReg(falconBase + FALCON_HWCFG2);
+        if (hwcfg2 & FALCON_HWCFG2_RESET_READY) break;
+        IODelay(1);
     }
 
-    // Step 5: DMA transfer firmware to IMEM
-    // Transfer in 256-byte blocks
-    IOLog("NVDAAL-GSP: DMA loading firmware (%lu bytes)...\n", (unsigned long)fwSize);
+    // Toggle ENGINE register (with register-read delays per NVIDIA)
+    writeReg(falconBase + FALCON_ENGINE, 1);
+    for (int i = 0; i < 10; i++) readReg(falconBase + FALCON_ENGINE);
+    writeReg(falconBase + FALCON_ENGINE, 0);
+    for (int i = 0; i < 10; i++) readReg(falconBase + FALCON_ENGINE);
+
+    // Wait for scrub via HWCFG2 bit 12 (GA102 method)
+    for (int i = 0; i < 50000; i++) {
+        uint32_t hwcfg2 = readReg(falconBase + FALCON_HWCFG2);
+        if (!(hwcfg2 & FALCON_HWCFG2_MEM_SCRUBBING)) break;
+        IODelay(1);
+    }
+
+    // === Step 2: Switch to Falcon core (kflcnSwitchToFalcon_GA102) ===
+    // Write BCR_CTRL: CORE_SELECT=FALCON (0), wait for VALID bit
+    writeReg(falconBase + FALCON_BCR_CTRL, 0);
+    for (int i = 0; i < 10000; i++) {
+        IODelay(1);
+        if (readReg(falconBase + FALCON_BCR_CTRL) & FALCON_BCR_CTRL_VALID) break;
+    }
+
+    // Set RM register to PMC_BOOT_0
+    uint32_t boot0 = readReg(NV_PMC_BOOT_0);
+    writeReg(falconBase + FALCON_RM, boot0);
+
+    // === Step 3: Disable context requirement (kflcnDisableCtxReq_TU102) ===
+    uint32_t fbifCtl = readReg(falconBase + FALCON_FBIF_CTL);
+    fbifCtl |= FALCON_FBIF_CTL_ALLOW_PHYS_NO_CTX;
+    writeReg(falconBase + FALCON_FBIF_CTL, fbifCtl);
+    writeReg(falconBase + FALCON_DMACTL, 0);
+
+    // === Step 4: Configure TRANSCFG for coherent sysmem + physical ===
+    uint32_t transcfg = readReg(falconBase + FALCON_FBIF_TRANSCFG(0));
+    transcfg &= ~0x07;
+    transcfg |= FALCON_TRANSCFG_TARGET_COHERENT | (1 << 2);  // COHERENT + PHYSICAL
+    writeReg(falconBase + FALCON_FBIF_TRANSCFG(0), transcfg);
+
+    // === Step 5: Set DMA base address ===
+    writeReg(falconBase + FALCON_DMATRFBASE, (uint32_t)(fwPhys >> 8));
+    writeReg(falconBase + FALCON_DMATRFBASE1, (uint32_t)(fwPhys >> 40));
+    IOLog("NVDAAL-GSP: DMA base: 0x%08x (hi: 0x%08x)\n",
+          (uint32_t)(fwPhys >> 8), (uint32_t)(fwPhys >> 40));
+
+    // === Step 6: DMA load IMEM with SEC=1 (kgspExecuteHsFalcon_GA102) ===
+    // SEC bit marks IMEM as secure for BROM hash verification
+    IOLog("NVDAAL-GSP: DMA loading IMEM (%lu bytes)...\n", (unsigned long)fwSize);
 
     for (size_t offset = 0; offset < fwSize; offset += 256) {
-        // Set memory offset in Falcon IMEM
         writeReg(falconBase + FALCON_DMATRFMOFFS, (uint32_t)offset);
-
-        // Set FB offset (offset within DMA buffer)
         writeReg(falconBase + FALCON_DMATRFFBOFFS, (uint32_t)offset);
 
-        // Issue DMA command: read from FB to IMEM
-        uint32_t cmd = FALCON_DMA_CMD_IMEM;  // Target IMEM, read direction
+        // IMEM: SEC=1 (bit 2) + IMEM target (bit 4) + SIZE_256B (6 << 8)
+        uint32_t cmd = FALCON_DMA_CMD_IMEM | FALCON_DMATRFCMD_SEC_IMEM | (6 << 8);
         writeReg(falconBase + FALCON_DMATRFCMD, cmd);
 
-        // Wait for DMA to complete
-        for (int wait = 0; wait < 1000; wait++) {
-            uint32_t status = readReg(falconBase + FALCON_DMATRFCMD);
-            if (status & FALCON_DMA_CMD_IDLE) {
-                break;
-            }
-            IODelay(10);
+        for (int wait = 0; wait < 2000; wait++) {
+            if (readReg(falconBase + FALCON_DMATRFCMD) & FALCON_DMA_CMD_IDLE) break;
+            IODelay(1);
         }
     }
 
-    IOLog("NVDAAL-GSP: DMA transfer complete\n");
-
-    // Step 6: Set boot vector
-    writeReg(falconBase + FALCON_BOOTVEC, bootVec);
-
-    // Step 7: Start Falcon
-    IOLog("NVDAAL-GSP: Starting Falcon execution...\n");
-    writeReg(falconBase + FALCON_CPUCTL, FALCON_CPUCTL_STARTCPU);
-
+    IOLog("NVDAAL-GSP: DMA IMEM loaded\n");
     return true;
 }
 
 bool NVDAALGsp::executeFwsecViaBrom(void) {
-    IOLog("NVDAAL-GSP: Executing FWSEC via Boot ROM interface...\n");
+    // Execute FWSEC via BROM (Boot ROM) in Heavy-Secure mode
+    // Based on NVIDIA kgspExecuteHsFalcon_GA102
+    // Flow: reset → DisableCtxReq → TRANSCFG → DMA load → BROM params → start
+
+    IOLog("NVDAAL-GSP: Executing FWSEC via BROM (GA102 HS DMA path)...\n");
 
     if (!fwsecMem || !fwsecInfo.valid) {
         IOLog("NVDAAL-GSP: No valid FWSEC firmware loaded\n");
         return false;
     }
 
-    // The Boot ROM interface on Ada Lovelace uses the RISCV BCR (Boot Config Region)
-    // to load and verify signed firmware
+    const uint32_t falconBase = NV_PGSP_BASE;
+    const uint8_t *vbiosData = (const uint8_t *)fwsecMem->getBytesNoCopy();
 
-    // Step 1: Prepare FWSEC firmware in DMA-accessible buffer
-    // The firmware is inside the VBIOS buffer at fwsecInfo.fwOffset
-    size_t fwsecSize = fwsecInfo.storedSize;
-    if (fwsecSize == 0) {
-        fwsecSize = fwsecInfo.imemSize + fwsecInfo.dmemSize;
-        IOLog("NVDAAL-GSP: Warning: Using calculated size %lu (no storedSize)\n",
-              (unsigned long)fwsecSize);
+    // Prepare DMA buffer with IMEM + DMEM (256-byte aligned)
+    size_t imemAligned = (fwsecInfo.imemSize + 255) & ~255;
+    size_t dmemAligned = (fwsecInfo.dmemSize + 255) & ~255;
+    size_t dmaSize = imemAligned + dmemAligned;
+
+    IOBufferMemoryDescriptor *dmaBuf = nullptr;
+    uint64_t dmaPhys = 0;
+
+    if (!allocDmaBuffer(&dmaBuf, dmaSize, &dmaPhys)) {
+        IOLog("NVDAAL-GSP: Failed to allocate FWSEC DMA buffer (%lu bytes)\n",
+              (unsigned long)dmaSize);
+        return false;
     }
 
-    // Calculate actual physical address of FWSEC firmware within VBIOS buffer
-    uint64_t fwsecFwPhys = fwsecPhys + fwsecInfo.fwOffset;
+    uint8_t *dmaVirt = (uint8_t *)dmaBuf->getBytesNoCopy();
+    memset(dmaVirt, 0, dmaSize);
 
-    IOLog("NVDAAL-GSP: FWSEC for BROM: size=%lu @ phys 0x%llx (vbios+0x%x)\n",
-          (unsigned long)fwsecSize, fwsecFwPhys, fwsecInfo.fwOffset);
+    // Copy IMEM at offset 0
+    const void *imem = vbiosData + fwsecInfo.imemOffset;
+    memcpy(dmaVirt, imem, fwsecInfo.imemSize);
 
-    // Step 2: Check GSP RISC-V BCR_CTRL state
-    uint32_t bcrCtrl = readReg(NV_PRISCV_RISCV_BCR_CTRL);
-    IOLog("NVDAAL-GSP: BCR_CTRL initial state: 0x%08x\n", bcrCtrl);
+    // Copy patched DMEM at imemAligned offset
+    // We need a working copy of DMEM for signature + FRTS patching
+    uint8_t *dmemCopy = (uint8_t *)IOMalloc(fwsecInfo.dmemSize);
+    if (!dmemCopy) {
+        freeDmaBuffer(&dmaBuf);
+        return false;
+    }
+    memcpy(dmemCopy, vbiosData + fwsecInfo.dmemOffset, fwsecInfo.dmemSize);
 
-    // Step 3: Set firmware address in BCR_DMEM_ADDR
-    // This tells the Boot ROM where to find the signed firmware
-    // Note: BCR uses physical address >> 8 for alignment
-    uint32_t fwAddr = (uint32_t)(fwsecFwPhys >> 8);
-    writeReg(NV_PRISCV_RISCV_BCR_DMEM_ADDR, fwAddr);
-    IOLog("NVDAAL-GSP: BCR_DMEM_ADDR set to 0x%08x (phys: 0x%llx)\n", fwAddr, fwsecFwPhys);
+    // Patch RSA signature
+    if (fwsecInfo.signatureCount > 0 && fwsecInfo.pkcDataOffset > 0) {
+        patchFwsecSignature(dmemCopy, fwsecInfo.dmemSize);
+    }
 
-    // Step 4: Trigger Boot ROM by setting BCR_CTRL valid bit
-    writeReg(NV_PRISCV_RISCV_BCR_CTRL, NV_PRISCV_RISCV_BCR_CTRL_VALID);
-    IOLog("NVDAAL-GSP: BCR_CTRL triggered\n");
+    // Patch FRTS command
+    uint64_t frtsOffset = 0;  // FWSEC computes from FB size
+    patchFrtsCmdBuffer(dmemCopy, fwsecInfo.dmemSize, frtsOffset);
 
-    // Step 5: Wait for Boot ROM to execute FWSEC
-    IOLog("NVDAAL-GSP: Waiting for Boot ROM execution...\n");
+    memcpy(dmaVirt + imemAligned, dmemCopy, fwsecInfo.dmemSize);
+    IOFree(dmemCopy, fwsecInfo.dmemSize);
 
-    for (int i = 0; i < 5000; i++) {  // 5 second timeout
-        uint32_t cpuctl = readReg(NV_PRISCV_RISCV_CPUCTL);
-        uint32_t retcode = readReg(NV_PRISCV_RISCV_BR_RETCODE);
+    // Flush DMA buffer
+    OSSynchronizeIO();
 
-        if (cpuctl & NV_PRISCV_CPUCTL_HALTED) {
-            IOLog("NVDAAL-GSP: Boot ROM halted, retcode=0x%08x, cpuctl=0x%08x\n",
-                  retcode, cpuctl);
+    IOLog("NVDAAL-GSP: DMA buffer @ 0x%llx: IMEM=%lu DMEM=%lu\n",
+          dmaPhys, (unsigned long)fwsecInfo.imemSize, (unsigned long)fwsecInfo.dmemSize);
 
-            if (retcode == 0) {
-                IOLog("NVDAAL-GSP: Boot ROM executed FWSEC successfully!\n");
-            } else {
-                IOLog("NVDAAL-GSP: Boot ROM returned error: 0x%08x\n", retcode);
+    // === Engine reset (GA102 sequence) ===
+    // PreResetWait
+    for (int i = 0; i < 150; i++) {
+        if (readReg(falconBase + FALCON_HWCFG2) & FALCON_HWCFG2_RESET_READY) break;
+        IODelay(1);
+    }
+
+    // Toggle ENGINE with register-read delays
+    writeReg(falconBase + FALCON_ENGINE, 1);
+    for (int i = 0; i < 10; i++) readReg(falconBase + FALCON_ENGINE);
+    writeReg(falconBase + FALCON_ENGINE, 0);
+    for (int i = 0; i < 10; i++) readReg(falconBase + FALCON_ENGINE);
+
+    // Wait for scrub (HWCFG2 bit 12)
+    for (int i = 0; i < 50000; i++) {
+        if (!(readReg(falconBase + FALCON_HWCFG2) & FALCON_HWCFG2_MEM_SCRUBBING)) break;
+        IODelay(1);
+    }
+
+    // Switch to Falcon core
+    writeReg(falconBase + FALCON_BCR_CTRL, 0);
+    for (int i = 0; i < 10000; i++) {
+        IODelay(1);
+        if (readReg(falconBase + FALCON_BCR_CTRL) & FALCON_BCR_CTRL_VALID) break;
+    }
+
+    // Set RM register
+    writeReg(falconBase + FALCON_RM, readReg(NV_PMC_BOOT_0));
+
+    // === DisableCtxReq ===
+    uint32_t fbifCtl = readReg(falconBase + FALCON_FBIF_CTL);
+    fbifCtl |= FALCON_FBIF_CTL_ALLOW_PHYS_NO_CTX;
+    writeReg(falconBase + FALCON_FBIF_CTL, fbifCtl);
+    writeReg(falconBase + FALCON_DMACTL, 0);
+
+    // === Configure TRANSCFG ===
+    uint32_t transcfg = readReg(falconBase + FALCON_FBIF_TRANSCFG(0));
+    transcfg &= ~0x07;
+    transcfg |= FALCON_TRANSCFG_TARGET_COHERENT | (1 << 2);  // COHERENT + PHYSICAL
+    writeReg(falconBase + FALCON_FBIF_TRANSCFG(0), transcfg);
+
+    // === Set DMA base ===
+    writeReg(falconBase + FALCON_DMATRFBASE, (uint32_t)(dmaPhys >> 8));
+    writeReg(falconBase + FALCON_DMATRFBASE1, (uint32_t)(dmaPhys >> 40));
+
+    // === DMA load IMEM with SEC=1 ===
+    IOLog("NVDAAL-GSP: DMA loading IMEM (%lu bytes)...\n", (unsigned long)imemAligned);
+    for (size_t offset = 0; offset < imemAligned; offset += 256) {
+        writeReg(falconBase + FALCON_DMATRFMOFFS, (uint32_t)offset);
+        writeReg(falconBase + FALCON_DMATRFFBOFFS, (uint32_t)offset);
+        uint32_t cmd = FALCON_DMA_CMD_IMEM | FALCON_DMATRFCMD_SEC_IMEM | (6 << 8);
+        writeReg(falconBase + FALCON_DMATRFCMD, cmd);
+
+        for (int wait = 0; wait < 2000; wait++) {
+            if (readReg(falconBase + FALCON_DMATRFCMD) & FALCON_DMA_CMD_IDLE) break;
+            IODelay(1);
+        }
+    }
+
+    // === DMA load DMEM (SEC=0) ===
+    IOLog("NVDAAL-GSP: DMA loading DMEM (%lu bytes)...\n", (unsigned long)dmemAligned);
+    for (size_t offset = 0; offset < dmemAligned; offset += 256) {
+        writeReg(falconBase + FALCON_DMATRFMOFFS, (uint32_t)offset);
+        writeReg(falconBase + FALCON_DMATRFFBOFFS, (uint32_t)(imemAligned + offset));
+        uint32_t cmd = FALCON_DMA_CMD_DMEM | (6 << 8);  // DMEM, no SEC
+        writeReg(falconBase + FALCON_DMATRFCMD, cmd);
+
+        for (int wait = 0; wait < 2000; wait++) {
+            if (readReg(falconBase + FALCON_DMATRFCMD) & FALCON_DMA_CMD_IDLE) break;
+            IODelay(1);
+        }
+    }
+
+    IOLog("NVDAAL-GSP: DMA load complete\n");
+
+    // === Set BROM parameters (via RISCV register space) ===
+    IOLog("NVDAAL-GSP: Setting BROM parameters: ucodeId=%u engIdMask=0x%x\n",
+          fwsecInfo.ucodeId, fwsecInfo.signatureVersions);
+
+    writeReg(falconBase + FALCON_BROM_PARAADDR, fwsecInfo.pkcDataOffset);
+    writeReg(falconBase + FALCON_BROM_ENGIDMASK, fwsecInfo.signatureVersions);  // Engine ID mask from V3 desc
+    writeReg(falconBase + FALCON_BROM_CURR_UCODE_ID, fwsecInfo.ucodeId);
+    writeReg(falconBase + FALCON_BROM_MOD_SEL, 1);  // RSA-3K
+
+    // Set boot vector
+    writeReg(falconBase + FALCON_BOOTVEC, fwsecInfo.bootVec);
+
+    // === Start via CPUCTL_ALIAS (triggers BROM HS verification) ===
+    IOLog("NVDAAL-GSP: Starting Falcon in HS mode via CPUCTL_ALIAS...\n");
+
+    // Read CPUCTL diagnostic before start
+    uint32_t cpuctlBefore = readReg(falconBase + FALCON_CPUCTL);
+    IOLog("NVDAAL-GSP: CPUCTL before: 0x%08x (halted=%u alias_en=%u)\n",
+          cpuctlBefore, (cpuctlBefore >> 4) & 1, (cpuctlBefore >> 6) & 1);
+
+    writeReg(falconBase + FALCON_CPUCTL_ALIAS, FALCON_CPUCTL_STARTCPU);
+    IODelay(100);
+
+    uint32_t cpuctlAfter = readReg(falconBase + FALCON_CPUCTL);
+    IOLog("NVDAAL-GSP: CPUCTL after: 0x%08x (halted=%u alias_en=%u)\n",
+          cpuctlAfter, (cpuctlAfter >> 4) & 1, (cpuctlAfter >> 6) & 1);
+
+    // === Wait for completion ===
+    IOLog("NVDAAL-GSP: Waiting for FWSEC HS execution...\n");
+    bool halted = false;
+    for (int i = 0; i < 5000; i++) {
+        uint32_t cpuctl = readReg(falconBase + FALCON_CPUCTL);
+        if (cpuctl & FALCON_CPUCTL_HALTED) {
+            uint32_t mbox0 = readReg(falconBase + FALCON_MAILBOX0);
+            uint32_t scratch0e = readReg(NV_PBUS_SW_SCRATCH_0E);
+            IOLog("NVDAAL-GSP: Falcon halted: CPUCTL=0x%08x MBOX0=0x%08x Scratch0E=0x%08x\n",
+                  cpuctl, mbox0, scratch0e);
+
+            if (mbox0 != 0) {
+                IOLog("NVDAAL-GSP: FWSEC BROM error in mailbox: 0x%08x\n", mbox0);
             }
+            halted = true;
             break;
         }
-
         if (i == 100 || i == 1000 || i == 3000) {
             IOLog("NVDAAL-GSP: Still waiting... cpuctl=0x%08x\n", cpuctl);
         }
-
-        IODelay(1000);  // 1ms
+        IODelay(1000);
     }
 
-    // Step 6: Check if WPR2 was configured
+    freeDmaBuffer(&dmaBuf);
+
+    if (!halted) {
+        IOLog("NVDAAL-GSP: FWSEC HS execution timeout\n");
+        return false;
+    }
+
+    // Check WPR2
     if (checkWpr2Setup()) {
-        IOLog("NVDAAL-GSP: WPR2 configured via Boot ROM!\n");
+        IOLog("NVDAAL-GSP: WPR2 configured via BROM HS execution!\n");
         return true;
     }
 
-    IOLog("NVDAAL-GSP: Boot ROM did not configure WPR2\n");
+    IOLog("NVDAAL-GSP: BROM execution completed but WPR2 not configured\n");
     return false;
 }
 
