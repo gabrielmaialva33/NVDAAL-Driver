@@ -34,7 +34,7 @@
             <key>IOPCIPrimaryMatchIfParentIsPCIBridge</key>
             <true/>
             <key>IOProbeScore</key>
-            <integer>2000</integer>
+            <integer>25000</integer>
             <key>IOProviderClass</key>
             <string>IOPCIDevice</string>
         </dict>
