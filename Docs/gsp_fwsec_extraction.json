@@ -1,0 +1,43 @@
+{
+  "fwimage_size": 73183232,
+  "fwsec_string_count": 128,
+  "frts_string_count": 3,
+  "nvfw_headers": 0,
+  "v3_descriptors": 2,
+  "dmemmapper_count": 0,
+  "v3_details": [
+    {
+      "offset": 13769520,
+      "vDesc": 3,
+      "stored_size": 197122,
+      "pkc_data_offset": 7,
+      "interface_offset": 65539,
+      "imem_phys_base": 1,
+      "imem_load_size": 262916,
+      "imem_virt_base": 15,
+      "dmem_phys_base": 328709,
+      "dmem_load_size": 31,
+      "engine_id_mask": 1286,
+      "ucode_id": 6,
+      "sig_count": 0,
+      "sig_versions": 63
+    },
+    {
+      "offset": 15890508,
+      "vDesc": 3,
+      "stored_size": 767,
+      "pkc_data_offset": 0,
+      "interface_offset": 1,
+      "imem_phys_base": 0,
+      "imem_load_size": 2,
+      "imem_virt_base": 3,
+      "dmem_phys_base": 9,
+      "dmem_load_size": 11,
+      "engine_id_mask": 1,
+      "ucode_id": 0,
+      "sig_count": 0,
+      "sig_versions": 4
+    }
+  ],
+  "nvfw_details": []
+}

@@ -1,0 +1,125 @@
+{
+  "file": "/mnt/c/Windows/System32/DriverStore/FileRepository/nv_dispi.inf_amd64_7840b4313191ae17/gsp_ga10x.bin",
+  "size": 73226224,
+  "elf": {
+    "class": "64-bit",
+    "machine": "0x00F3",
+    "type": 1,
+    "sections": 17
+  },
+  "sections": {
+    ".fwimage": {
+      "index": 1,
+      "type": 1,
+      "offset": 64,
+      "size": 73183232
+    },
+    ".note.gnu.build-id": {
+      "index": 2,
+      "type": 7,
+      "offset": 73183296,
+      "size": 36
+    },
+    ".fwversion": {
+      "index": 3,
+      "type": 1,
+      "offset": 73183332,
+      "size": 10
+    },
+    ".fwsignature_gb20y": {
+      "index": 4,
+      "type": 1,
+      "offset": 73183342,
+      "size": 4096,
+      "sha256": "7149c5075d077fe61597e81b32370c7c3f0191d55e34f641151252b8dc5670b4"
+    },
+    ".fwsignature_cc_gb20x": {
+      "index": 5,
+      "type": 1,
+      "offset": 73187438,
+      "size": 4096,
+      "sha256": "c32ae7788e891e16268cea860e1f0c849fb3c4d4b1655154dba0216327b21a1c"
+    },
+    ".fwsignature_gb20x": {
+      "index": 6,
+      "type": 1,
+      "offset": 73191534,
+      "size": 4096,
+      "sha256": "833738e6a5da7485b427af4d09be006e9f98968c1bd5ae2348affc56eaecd327"
+    },
+    ".fwsignature_cc_gb10x": {
+      "index": 7,
+      "type": 1,
+      "offset": 73195630,
+      "size": 4096,
+      "sha256": "5a5f9c42285e54cbf59ad067cfd4fcfa0af0f933b8e54e046e3c46f059a4eb03"
+    },
+    ".fwsignature_gb10y": {
+      "index": 8,
+      "type": 1,
+      "offset": 73199726,
+      "size": 4096,
+      "sha256": "621152ba001226fbdd66448defe961aa5d1829046f3fec74a41007ab536b5c23"
+    },
+    ".fwsignature_gb10x": {
+      "index": 9,
+      "type": 1,
+      "offset": 73203822,
+      "size": 4096,
+      "sha256": "a1890501c42ff81e0c750d7a4fb2b23941840b468bcbd537ec089b4aec6fa22e"
+    },
+    ".fwsignature_cc_gh100": {
+      "index": 10,
+      "type": 1,
+      "offset": 73207918,
+      "size": 4096,
+      "sha256": "18d70da80dc204605fbdc58f24e8b849a5d1d383a31deab97dbf8ac42dc1a9f1"
+    },
+    ".fwsignature_gh100": {
+      "index": 11,
+      "type": 1,
+      "offset": 73212014,
+      "size": 4096,
+      "sha256": "af1654af2cff76919f4187713b037ffdc7d3f11bdc743ecc38a4f4afff0a8b9c"
+    },
+    ".fwsignature_ad10x": {
+      "index": 12,
+      "type": 1,
+      "offset": 73216110,
+      "size": 4096,
+      "sha256": "e6d09e58c0c360f92d5b69397221013c594b0bc4ebec8de374b985329ad69784"
+    },
+    ".fwsignature_ga10x": {
+      "index": 13,
+      "type": 1,
+      "offset": 73220206,
+      "size": 4096,
+      "sha256": "be378e2dda2debfc066e10477297f4aac228d3fdc0d2c8bf44478ce45e712c80"
+    },
+    ".symtab": {
+      "index": 14,
+      "type": 2,
+      "offset": 73224304,
+      "size": 96
+    },
+    ".strtab": {
+      "index": 15,
+      "type": 3,
+      "offset": 73224400,
+      "size": 466
+    },
+    ".shstrtab": {
+      "index": 16,
+      "type": 3,
+      "offset": 73224866,
+      "size": 265
+    }
+  },
+  "fwimage": {
+    "size": 73183232,
+    "fwsec_markers": 0,
+    "dmemmapper_count": 0,
+    "fwsc_count": 0,
+    "nvfw_headers": 0
+  }
+}
