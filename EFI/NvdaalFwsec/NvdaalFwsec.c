@@ -24,8 +24,14 @@
 #include <Guid/FileInfo.h>
 #include <IndustryStandard/Pci.h>
 
-// FWSEC implementation header
-#include "fwsec.h"
+// Forward declaration of new FWSEC implementation
+EFI_STATUS
+FwsecExecuteFrts (
+    IN  UINT32  Bar0,
+    IN  UINT8   *VbiosData,
+    IN  UINTN   VbiosSize,
+    IN  UINT64  FrtsOffset
+    );
 
 //=============================================================================
 // Constants
@@ -278,6 +284,7 @@ STATIC EFI_PCI_IO_PROTOCOL  *mPciIo = NULL;
 STATIC UINT32               *mMmioBase = NULL;
 STATIC FWSEC_INFO           mFwsecInfo;
 STATIC EFI_FILE_PROTOCOL    *mLogFile = NULL;
+STATIC EFI_FILE_PROTOCOL    *mLogRoot = NULL;  // Root directory for saving additional files
 STATIC CHAR8                mLogBuffer[512];
 
 //=============================================================================
@@ -340,7 +347,7 @@ OpenLogFile (
                      );
     if (!EFI_ERROR (Status)) {
       Print (L"NVDAAL: Log file created in EFI\\OC on FS %u\n", Index);
-      Root->Close (Root);
+      mLogRoot = Root;  // Keep root open for saving additional files
       FreePool (HandleBuffer);
       return EFI_SUCCESS;
     }
@@ -355,7 +362,7 @@ OpenLogFile (
                      );
     if (!EFI_ERROR (Status)) {
       Print (L"NVDAAL: Log file created in root on FS %u\n", Index);
-      Root->Close (Root);
+      mLogRoot = Root;  // Keep root open for saving additional files
       FreePool (HandleBuffer);
       return EFI_SUCCESS;
     }
@@ -378,10 +385,14 @@ CloseLogFile (
     mLogFile->Close (mLogFile);
     mLogFile = NULL;
   }
+  if (mLogRoot != NULL) {
+    mLogRoot->Close (mLogRoot);
+    mLogRoot = NULL;
+  }
 }
 
-// Forward declaration
-STATIC VOID LogPrint (IN CONST CHAR16 *Format, ...);
+// Forward declaration (not STATIC so fwsec_impl.c can use it)
+VOID LogPrint (IN CONST CHAR16 *Format, ...);
 
 //=============================================================================
 // Scrubber Firmware Loading
@@ -521,7 +532,6 @@ LoadScrubberFirmware (
   return EFI_NOT_FOUND;
 }
 
-STATIC
 VOID
 LogPrint (
   IN CONST CHAR16  *Format,
@@ -555,6 +565,15 @@ LogPrint (
     mLogFile->Write (mLogFile, &WriteSize, mLogBuffer);
     mLogFile->Flush (mLogFile);
   }
+}
+
+// Simple string logging function (non-variadic, can be called from other files)
+VOID
+LogStr (
+  IN CONST CHAR16  *Str
+  )
+{
+  LogPrint (L"%s", Str);
 }
 
 //=============================================================================
@@ -986,6 +1005,29 @@ ReadVbiosFromGpu (
   *VbiosData = Vbios;
   *VbiosSize = MaxSize;
 
+  // Save VBIOS to file for offline analysis
+  {
+    EFI_FILE_PROTOCOL *VbiosFile = NULL;
+    EFI_STATUS SaveStatus;
+
+    if (mLogRoot != NULL) {
+      SaveStatus = mLogRoot->Open (
+        mLogRoot,
+        &VbiosFile,
+        L"NVDAAL_VBIOS.bin",
+        EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+        0
+        );
+
+      if (!EFI_ERROR (SaveStatus) && VbiosFile != NULL) {
+        UINTN WriteSize = MaxSize;
+        VbiosFile->Write (VbiosFile, &WriteSize, Vbios);
+        VbiosFile->Close (VbiosFile);
+        LogPrint (L"NVDAAL: VBIOS saved to NVDAAL_VBIOS.bin (%u bytes)\n", MaxSize);
+      }
+    }
+  }
+
   return EFI_SUCCESS;
 }
 
@@ -1272,50 +1314,6 @@ ParseVbios (
   if (!mFwsecInfo.Valid) {
     Print (L"NVDAAL: Could not extract FWSEC info from PMU table\n");
     return EFI_NOT_FOUND;
-  }
-
-  return EFI_SUCCESS;
-}
-
-//=============================================================================
-// FWSEC Execution
-//=============================================================================
-
-STATIC
-EFI_STATUS
-LoadFalconUcode (
-  IN UINT32       FalconBase,
-  IN CONST UINT8  *Imem,
-  IN UINTN        ImemSize,
-  IN CONST UINT8  *Dmem,
-  IN UINTN        DmemSize
-  )
-{
-  CONST UINT32  *ImemData = (CONST UINT32 *)Imem;
-  CONST UINT32  *DmemData = (CONST UINT32 *)Dmem;
-  UINTN         i;
-
-  Print (L"NVDAAL: Loading Falcon ucode: IMEM=%u, DMEM=%u\n", ImemSize, DmemSize);
-
-  // Load IMEM (instruction memory)
-  // CRITICAL FIX: Use bit 23 for write enable, bit 24 for auto-increment
-  for (i = 0; i < ImemSize; i += 4) {
-    if ((i % 256) == 0) {
-      // Set IMEM address with write enable (bit 23) and auto-increment (bit 24)
-      UINT32 ImemcVal = ((i / 256) << 8) | FALCON_MEM_WRITE_ENABLE | FALCON_IMEMC_AINCW;
-      WriteReg (FalconBase + FALCON_IMEMC(0), ImemcVal);
-    }
-    WriteReg (FalconBase + FALCON_IMEMD(0), ImemData[i / 4]);
-  }
-
-  // Load DMEM (data memory)
-  for (i = 0; i < DmemSize; i += 4) {
-    if ((i % 256) == 0) {
-      // Set DMEM address with write enable (bit 23) and auto-increment (bit 24)
-      UINT32 DmemcVal = ((i / 256) << 8) | FALCON_MEM_WRITE_ENABLE | FALCON_DMEMC_AINCW;
-      WriteReg (FalconBase + FALCON_DMEMC(0), DmemcVal);
-    }
-    WriteReg (FalconBase + FALCON_DMEMD(0), DmemData[i / 4]);
   }
 
   return EFI_SUCCESS;
@@ -1934,144 +1932,6 @@ ExecuteFwsecViaBrom (
   return EFI_SUCCESS;
 }
 
-STATIC
-EFI_STATUS
-ExecuteFwsecFrts (
-  IN CONST UINT8  *VbiosData,
-  IN UINTN        VbiosSize
-  )
-{
-  UINT8         *DmemCopy;
-  DMEMMAPPER_HEADER *Mapper;
-  UINT32        Cpuctl;
-  UINTN         Timeout;
-
-  if (!mFwsecInfo.Valid) {
-    Print (L"NVDAAL: FWSEC info not available\n");
-    return EFI_NOT_READY;
-  }
-
-  // Validate offsets
-  if (mFwsecInfo.ImemOffset + mFwsecInfo.ImemSize > VbiosSize ||
-      mFwsecInfo.DmemOffset + mFwsecInfo.DmemSize > VbiosSize) {
-    Print (L"NVDAAL: Invalid FWSEC offsets\n");
-    return EFI_INVALID_PARAMETER;
-  }
-
-  Print (L"\n=== Executing FWSEC-FRTS ===\n");
-
-  // Step 1: Make a copy of DMEM to patch DMEMMAPPER
-  DmemCopy = AllocateCopyPool (mFwsecInfo.DmemSize, VbiosData + mFwsecInfo.DmemOffset);
-  if (DmemCopy == NULL) {
-    Print (L"NVDAAL: Failed to allocate DMEM copy\n");
-    return EFI_OUT_OF_RESOURCES;
-  }
-
-  // Step 2: Patch DMEMMAPPER initCmd to execute FRTS
-  if (mFwsecInfo.DmemMapperOffset > 0 &&
-      mFwsecInfo.DmemMapperOffset + sizeof(DMEMMAPPER_HEADER) <= mFwsecInfo.DmemSize) {
-    Mapper = (DMEMMAPPER_HEADER *)(DmemCopy + mFwsecInfo.DmemMapperOffset);
-
-    // FIX: Validate DMEMMAPPER signature before patching
-    if (Mapper->Signature != DMEMMAPPER_SIGNATURE) {
-      Print (L"NVDAAL: Invalid DMEMMAPPER signature: 0x%08X (expected 0x%08X)\n",
-             Mapper->Signature, DMEMMAPPER_SIGNATURE);
-      FreePool (DmemCopy);
-      return EFI_INVALID_PARAMETER;
-    }
-
-    Print (L"NVDAAL: DMEMMAPPER before patch:\n");
-    Print (L"  Signature: 0x%08X (DMAP)\n", Mapper->Signature);
-    Print (L"  Version: 0x%04X\n", Mapper->Version);
-    Print (L"  InitCmd: 0x%08X\n", Mapper->InitCmd);
-
-    // Patch initCmd to FRTS command
-    Mapper->InitCmd = DMEMMAPPER_CMD_FRTS;
-
-    Print (L"NVDAAL: DMEMMAPPER after patch:\n");
-    Print (L"  InitCmd: 0x%08X (FRTS)\n", Mapper->InitCmd);
-  } else {
-    Print (L"NVDAAL: Warning - DMEMMAPPER not found, using DMEM as-is\n");
-  }
-
-  // FIX: Correct Falcon initialization sequence
-  // Step 3: Set boot vector FIRST (before reset)
-  Print (L"NVDAAL: Setting boot vector to 0x%X\n", mFwsecInfo.BootVec);
-  WriteReg (NV_PGSP_BASE + FALCON_BOOTVEC, mFwsecInfo.BootVec);
-
-  // Step 4: Reset GSP Falcon
-  Print (L"NVDAAL: Resetting GSP Falcon...\n");
-  WriteReg (NV_PGSP_BASE + FALCON_CPUCTL, 0);
-  gBS->Stall (100);  // 100us
-
-  Cpuctl = ReadReg (NV_PGSP_BASE + FALCON_CPUCTL);
-  Print (L"NVDAAL: GSP CPUCTL after reset: 0x%08X\n", Cpuctl);
-
-  // Step 5: Load ucode into GSP Falcon
-  Print (L"NVDAAL: Loading FWSEC ucode into GSP Falcon...\n");
-  LoadFalconUcode (
-    NV_PGSP_BASE,
-    VbiosData + mFwsecInfo.ImemOffset,
-    mFwsecInfo.ImemSize,
-    DmemCopy,
-    mFwsecInfo.DmemSize
-    );
-
-  FreePool (DmemCopy);
-
-  // Step 6: Start Falcon execution
-  Print (L"NVDAAL: Starting Falcon execution...\n");
-  WriteReg (NV_PGSP_BASE + FALCON_CPUCTL, FALCON_CPUCTL_STARTCPU);
-  gBS->Stall (100);  // 100us delay after start
-
-  // Step 7: Wait for completion with error checking
-  Print (L"NVDAAL: Waiting for FWSEC completion...\n");
-
-  UINT32 Mailbox0 = 0;
-  for (Timeout = 0; Timeout < 1000; Timeout++) {
-    gBS->Stall (1000);  // 1ms
-
-    Cpuctl = ReadReg (NV_PGSP_BASE + FALCON_CPUCTL);
-
-    if (Cpuctl & FALCON_CPUCTL_HALTED) {
-      Mailbox0 = ReadReg (NV_PGSP_BASE + FALCON_MAILBOX0);
-      Print (L"NVDAAL: Falcon halted after %u ms, CPUCTL=0x%08X, MB0=0x%08X\n",
-             Timeout, Cpuctl, Mailbox0);
-      break;
-    }
-
-    if (Timeout == 100 || Timeout == 500) {
-      Print (L"NVDAAL: Still running... CPUCTL=0x%08X\n", Cpuctl);
-    }
-  }
-
-  if (Timeout >= 1000) {
-    Print (L"NVDAAL: Timeout waiting for Falcon\n");
-    return EFI_TIMEOUT;
-  }
-
-  // FIX: Check Falcon mailbox for error codes (0 = success)
-  if (Mailbox0 != 0) {
-    Print (L"NVDAAL: Falcon execution failed with error code 0x%08X\n", Mailbox0);
-    Print (L"NVDAAL: Common error codes:\n");
-    Print (L"  0x1 = Invalid signature\n");
-    Print (L"  0x2 = Invalid command\n");
-    Print (L"  0x3 = Authentication failed\n");
-    return EFI_SECURITY_VIOLATION;
-  }
-
-  // Step 8: Check WPR2 status
-  if (IsWpr2Enabled ()) {
-    Print (L"\nNVDAAL: *** SUCCESS! WPR2 is now configured! ***\n");
-    return EFI_SUCCESS;
-  }
-
-  Print (L"\nNVDAAL: FWSEC completed but WPR2 not configured\n");
-  Print (L"NVDAAL: This may be due to signature verification in HS mode\n");
-
-  return EFI_SECURITY_VIOLATION;
-}
-
 //=============================================================================
 // Main Entry Point
 //=============================================================================
@@ -2277,13 +2137,78 @@ NvdaalFwsecMain (
     FrtsOffset = ((UINT64)FbSizeMb << 20) - 0x100000;  // FB_SIZE - 1MB
     LogPrint (L"NVDAAL: FRTS offset: 0x%llX\n", FrtsOffset);
 
+    // Test LogStr function (used by fwsec_impl.c)
+    LogPrint (L"NVDAAL: Testing LogStr function...\n");
+    LogStr (L"NVDAAL: [LogStr TEST] If you see this, LogStr works!\n");
+    LogPrint (L"NVDAAL: LogStr test complete, calling FwsecExecuteFrts...\n");
+
+    // Dump first 64 bytes of VBIOS for analysis
+    LogPrint (L"NVDAAL: VBIOS header dump:\n");
+    for (UINTN i = 0; i < 64; i += 16) {
+      LogPrint (L"  %04X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
+        i,
+        VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
+        VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
+        VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
+        VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
+    }
+
+    // Dump around PMU table area (0x80DE0-0x80E10)
+    if (VbiosSize > 0x80E10) {
+      LogPrint (L"NVDAAL: PMU table area dump (0x80DE0):\n");
+      for (UINTN i = 0x80DE0; i < 0x80E10; i += 16) {
+        LogPrint (L"  %05X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
+          i,
+          VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
+          VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
+          VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
+          VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
+      }
+    }
+
+    // Dump BIT header area (0x1A0-0x220)
+    LogPrint (L"NVDAAL: BIT header area dump (0x1A0-0x220):\n");
+    for (UINTN i = 0x1A0; i < 0x220; i += 16) {
+      LogPrint (L"  %04X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
+        i,
+        VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
+        VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
+        VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
+        VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
+    }
+
+    // Dump FALCON_DATA area (0x410-0x450)
+    LogPrint (L"NVDAAL: FALCON_DATA area dump (0x410-0x450):\n");
+    for (UINTN i = 0x410; i < 0x450; i += 16) {
+      LogPrint (L"  %04X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
+        i,
+        VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
+        VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
+        VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
+        VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
+    }
+
+    // Check for ASUS signature in first 0x200 bytes
+    LogPrint (L"NVDAAL: Checking for vendor signatures...\n");
+    for (UINTN i = 0; i < 0x200 - 4; i++) {
+      if (VbiosData[i] == 'A' && VbiosData[i+1] == 'S' &&
+          VbiosData[i+2] == 'U' && VbiosData[i+3] == 'S') {
+        LogPrint (L"NVDAAL: Found 'ASUS' signature at offset 0x%X\n", i);
+      }
+      if (VbiosData[i] == 'R' && VbiosData[i+1] == 'O' && VbiosData[i+2] == 'G') {
+        LogPrint (L"NVDAAL: Found 'ROG' signature at offset 0x%X\n", i);
+      }
+    }
+
     // Execute FWSEC-FRTS using new professional implementation
+    LogPrint (L"NVDAAL: Calling FwsecExecuteFrts now...\n");
     Status = FwsecExecuteFrts (
       (UINT32)(UINTN)mMmioBase,  // BAR0 address
       VbiosData,
       VbiosSize,
       FrtsOffset
       );
+    LogPrint (L"NVDAAL: FwsecExecuteFrts returned: %r\n", Status);
   }
 
   FreePool (VbiosData);

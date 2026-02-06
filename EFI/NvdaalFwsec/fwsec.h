@@ -15,7 +15,7 @@
 #define NVDAAL_FWSEC_H_
 
 #include <Uefi.h>
-#include "vbios.h"
+// Note: Not including vbios.h to avoid typedef conflicts
 
 //==============================================================================
 // Constants - From NVIDIA open-gpu-kernel-modules

@@ -17,15 +17,19 @@
 
 #include "fwsec.h"
 #include "falcon.h"
-#include "vbios.h"
+// Note: Using local renamed types (FWSEC_BIT_HDR, etc) to avoid conflicts
 
 //==============================================================================
-// Debug Logging
+// Debug Logging - Use LogPrint from NvdaalFwsec.c to write to log file
 //==============================================================================
 
-#define LOG(fmt, ...)       Print(L"NVDAAL: " fmt L"\n", ##__VA_ARGS__)
-#define LOG_DBG(fmt, ...)   Print(L"NVDAAL: [DBG] " fmt L"\n", ##__VA_ARGS__)
-#define LOG_ERR(fmt, ...)   Print(L"NVDAAL: [ERR] " fmt L"\n", ##__VA_ARGS__)
+// External logging function from NvdaalFwsec.c (variadic, writes to file)
+extern VOID EFIAPI LogPrint (IN CONST CHAR16 *Format, ...);
+
+// Use LogPrint directly (simpler and guaranteed to work)
+#define LOG(fmt, ...)     LogPrint(L"NVDAAL: [FWSEC] " fmt L"\n", ##__VA_ARGS__)
+#define LOG_DBG(fmt, ...) LogPrint(L"NVDAAL: [FWSEC-DBG] " fmt L"\n", ##__VA_ARGS__)
+#define LOG_ERR(fmt, ...) LogPrint(L"NVDAAL: [FWSEC-ERR] " fmt L"\n", ##__VA_ARGS__)
 
 //==============================================================================
 // Constants
@@ -165,6 +169,8 @@ FindBitHeader (
     UINT16  Id;
     UINT32  Sig;
 
+    LOG(L"FindBitHeader: searching in %d bytes...", VbiosSize);
+
     // Search for BIT header pattern: 0xFFB8 followed by "BIT\0"
     for (Offset = 0; Offset < VbiosSize - 12; Offset++) {
         Id = *(UINT16 *)(VbiosData + Offset);
@@ -205,12 +211,15 @@ FindFwsecDescriptor (
     )
 {
     FWSEC_BIT_HDR   *BitHdr;
-    UINT8           *TokenPtr;
     UINT32          TokenOffset;
     UINT32          i;
 
+    LOG(L"FindFwsecDescriptor: BIT@0x%X ExpROM@0x%X", BitOffset, ExpansionRomOffset);
+
     BitHdr = (FWSEC_BIT_HDR *)(VbiosData + BitOffset);
     TokenOffset = BitOffset + BitHdr->HeaderSize;
+
+    LOG(L"BIT has %d tokens, starting at 0x%X", BitHdr->TokenEntries, TokenOffset);
 
     // Iterate through BIT tokens
     for (i = 0; i < BitHdr->TokenEntries; i++) {
@@ -220,14 +229,19 @@ FindFwsecDescriptor (
         if (Token->TokenId == FWSEC_TOKEN_FALCON_DATA &&
             Token->DataVersion == 2 &&
             Token->DataSize >= 4) {
+            LOG(L"Found FALCON_DATA token at 0x%X", TokenOffset);
 
             FWSEC_FALCON_DATA *FalconData;
             FWSEC_PMU_HDR *PmuHdr;
             UINT32 PmuTableOffset;
             UINT32 j;
 
-            FalconData = (FWSEC_FALCON_DATA *)(VbiosData + Token->DataPtr);
+            // DataPtr is relative to expansion ROM, not absolute
+            FalconData = (FWSEC_FALCON_DATA *)(VbiosData + ExpansionRomOffset + Token->DataPtr);
             PmuTableOffset = ExpansionRomOffset + FalconData->FalconUcodeTablePtr;
+
+            LOG_DBG(L"FALCON_DATA @ 0x%X: UcodeTablePtr=0x%X",
+                    ExpansionRomOffset + Token->DataPtr, FalconData->FalconUcodeTablePtr);
 
             if (PmuTableOffset + sizeof(FWSEC_PMU_HDR) > VbiosSize) {
                 LOG_ERR(L"PMU table offset out of bounds");
@@ -236,10 +250,43 @@ FindFwsecDescriptor (
 
             PmuHdr = (FWSEC_PMU_HDR *)(VbiosData + PmuTableOffset);
 
-            // Validate PMU header
+            LOG_DBG(L"PMU Header @ 0x%X: ver=%d hdr=%d entry=%d count=%d",
+                    PmuTableOffset, PmuHdr->Version, PmuHdr->HeaderSize,
+                    PmuHdr->EntrySize, PmuHdr->EntryCount);
+
+            // Dump raw PMU table bytes for analysis
+            LOG(L"PMU Table raw bytes at 0x%X:", PmuTableOffset);
+            {
+                UINT8 *PmuRaw = VbiosData + PmuTableOffset;
+                LOG(L"  %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X",
+                    PmuRaw[0], PmuRaw[1], PmuRaw[2], PmuRaw[3],
+                    PmuRaw[4], PmuRaw[5], PmuRaw[6], PmuRaw[7],
+                    PmuRaw[8], PmuRaw[9], PmuRaw[10], PmuRaw[11],
+                    PmuRaw[12], PmuRaw[13], PmuRaw[14], PmuRaw[15]);
+            }
+
+            // Validate PMU header - version should be 1 for V1 table
+            // NOTE: Version 231 (0xE7) indicates corrupted pointer per HuggingChat analysis
             if (PmuHdr->Version != 1 || PmuHdr->HeaderSize < 6 ||
                 PmuHdr->EntrySize < 6 || PmuHdr->EntryCount == 0) {
-                LOG_ERR(L"Invalid PMU table header");
+                LOG_ERR(L"Invalid PMU table: ver=%d (0x%02X) hdr=%d entry=%d count=%d",
+                        PmuHdr->Version, PmuHdr->Version, PmuHdr->HeaderSize,
+                        PmuHdr->EntrySize, PmuHdr->EntryCount);
+                LOG_ERR(L"Expected ver=1, got ver=%d - likely corrupted pointer!", PmuHdr->Version);
+
+                // Try alternate interpretation: ASUS may use different offset
+                // Check if this looks like clock/timing data instead
+                LOG(L"Checking alternate PMU locations...");
+
+                // Try offset 0x80 from BIT (instead of FALCON_DATA token)
+                UINT32 AltOffset = ExpansionRomOffset + 0x80;
+                if (AltOffset + 16 < VbiosSize) {
+                    UINT8 *AltPmu = VbiosData + AltOffset;
+                    LOG(L"Alt PMU @ 0x%X: %02X %02X %02X %02X %02X %02X %02X %02X",
+                        AltOffset, AltPmu[0], AltPmu[1], AltPmu[2], AltPmu[3],
+                        AltPmu[4], AltPmu[5], AltPmu[6], AltPmu[7]);
+                }
+
                 goto next_token;
             }
 
@@ -328,10 +375,14 @@ FwsecParseFromVbios (
     UINT32      ImageOffset;
     UINT32      SignaturesOffset;
 
+    LOG(L"FwsecParseFromVbios: VBIOS=%p Size=%d Bar0=0x%X", VbiosData, VbiosSize, Bar0);
+
     ZeroMem(Context, sizeof(FWSEC_CONTEXT));
     Context->Bar0 = Bar0;
     Context->VbiosData = VbiosData;
     Context->VbiosSize = VbiosSize;
+
+    LOG(L"Searching for expansion ROM (0xAA55)...");
 
     // Find expansion ROM offset (first 0x55AA signature)
     for (UINT32 Off = 0; Off < VbiosSize - 2; Off += 0x100) {
