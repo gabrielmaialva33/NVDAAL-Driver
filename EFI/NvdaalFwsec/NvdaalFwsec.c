@@ -2244,21 +2244,19 @@ NvdaalFwsecMain (
   }
 
   //=========================================================================
-  // METHOD 3: New Professional FWSEC Implementation
-  // Based on NVIDIA open-gpu-kernel-modules (kernel_gsp_frts_tu102.c)
+  // METHOD 3: Professional FWSEC-FRTS Implementation
+  // Try loading from extracted file first, then fall back to VBIOS parsing
   //=========================================================================
   LogPrint (L"\n*** METHOD 3: Professional FWSEC-FRTS Implementation ***\n");
   LogPrint (L"Using NVIDIA-based implementation with proper signature patching\n\n");
 
   {
     // Calculate FRTS offset at top of VRAM (1MB from end)
-    // Read usable FB size from register
     UINT32 FbSizeMb = ReadReg (0x00100A10);  // NV_USABLE_FB_SIZE_IN_MB
     UINT64 FrtsOffset;
 
     if (FbSizeMb == 0 || FbSizeMb == 0xFFFFFFFF || FbSizeMb > 64 * 1024) {
-      // Default to 24GB - 1MB for RTX 4090 if register unavailable
-      FbSizeMb = 24 * 1024;
+      FbSizeMb = 24 * 1024;  // Default to 24GB for RTX 4090
       LogPrint (L"NVDAAL: Using default FB size: %u MB\n", FbSizeMb);
     } else {
       LogPrint (L"NVDAAL: FB size from register: %u MB\n", FbSizeMb);
@@ -2267,78 +2265,44 @@ NvdaalFwsecMain (
     FrtsOffset = ((UINT64)FbSizeMb << 20) - 0x100000;  // FB_SIZE - 1MB
     LogPrint (L"NVDAAL: FRTS offset: 0x%llX\n", FrtsOffset);
 
-    // Test LogStr function (used by fwsec_impl.c)
-    LogPrint (L"NVDAAL: Testing LogStr function...\n");
-    LogStr (L"NVDAAL: [LogStr TEST] If you see this, LogStr works!\n");
-    LogPrint (L"NVDAAL: LogStr test complete, calling FwsecExecuteFrts...\n");
+    // METHOD 3A: Try loading FWSEC from extracted file (preferred)
+    LogPrint (L"\n--- Method 3A: FWSEC from extracted file ---\n");
+    Status = LoadFwsecFirmware ();
+    if (!EFI_ERROR (Status) && mFwsecData != NULL) {
+      LogPrint (L"NVDAAL: Executing FWSEC-FRTS from file...\n");
+      Status = FwsecExecuteFrtsFromFile (
+        (UINT32)(UINTN)mMmioBase,
+        mFwsecData,
+        mFwsecSize,
+        FrtsOffset
+        );
+      LogPrint (L"NVDAAL: FwsecExecuteFrtsFromFile returned: %r\n", Status);
 
-    // Dump first 64 bytes of VBIOS for analysis
-    LogPrint (L"NVDAAL: VBIOS header dump:\n");
-    for (UINTN i = 0; i < 64; i += 16) {
-      LogPrint (L"  %04X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
-        i,
-        VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
-        VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
-        VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
-        VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
-    }
+      FreePool (mFwsecData);
+      mFwsecData = NULL;
 
-    // Dump around PMU table area (0x80DE0-0x80E10)
-    if (VbiosSize > 0x80E10) {
-      LogPrint (L"NVDAAL: PMU table area dump (0x80DE0):\n");
-      for (UINTN i = 0x80DE0; i < 0x80E10; i += 16) {
-        LogPrint (L"  %05X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
-          i,
-          VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
-          VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
-          VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
-          VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
+      if (!EFI_ERROR (Status)) {
+        // Success! Skip Method 3B
+        goto method3_done;
       }
+      LogPrint (L"NVDAAL: File-based FWSEC failed, trying VBIOS parsing...\n");
+    } else {
+      LogPrint (L"NVDAAL: fwsec.bin not found, trying VBIOS parsing...\n");
     }
 
-    // Dump BIT header area (0x1A0-0x220)
-    LogPrint (L"NVDAAL: BIT header area dump (0x1A0-0x220):\n");
-    for (UINTN i = 0x1A0; i < 0x220; i += 16) {
-      LogPrint (L"  %04X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
-        i,
-        VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
-        VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
-        VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
-        VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
-    }
-
-    // Dump FALCON_DATA area (0x410-0x450)
-    LogPrint (L"NVDAAL: FALCON_DATA area dump (0x410-0x450):\n");
-    for (UINTN i = 0x410; i < 0x450; i += 16) {
-      LogPrint (L"  %04X: %02X %02X %02X %02X %02X %02X %02X %02X  %02X %02X %02X %02X %02X %02X %02X %02X\n",
-        i,
-        VbiosData[i+0], VbiosData[i+1], VbiosData[i+2], VbiosData[i+3],
-        VbiosData[i+4], VbiosData[i+5], VbiosData[i+6], VbiosData[i+7],
-        VbiosData[i+8], VbiosData[i+9], VbiosData[i+10], VbiosData[i+11],
-        VbiosData[i+12], VbiosData[i+13], VbiosData[i+14], VbiosData[i+15]);
-    }
-
-    // Check for ASUS signature in first 0x200 bytes
-    LogPrint (L"NVDAAL: Checking for vendor signatures...\n");
-    for (UINTN i = 0; i < 0x200 - 4; i++) {
-      if (VbiosData[i] == 'A' && VbiosData[i+1] == 'S' &&
-          VbiosData[i+2] == 'U' && VbiosData[i+3] == 'S') {
-        LogPrint (L"NVDAAL: Found 'ASUS' signature at offset 0x%X\n", i);
-      }
-      if (VbiosData[i] == 'R' && VbiosData[i+1] == 'O' && VbiosData[i+2] == 'G') {
-        LogPrint (L"NVDAAL: Found 'ROG' signature at offset 0x%X\n", i);
-      }
-    }
-
-    // Execute FWSEC-FRTS using new professional implementation
-    LogPrint (L"NVDAAL: Calling FwsecExecuteFrts now...\n");
+    // METHOD 3B: Fall back to VBIOS parsing (unlikely to work for Ada)
+    LogPrint (L"\n--- Method 3B: FWSEC from VBIOS ---\n");
+    LogPrint (L"NVDAAL: Calling FwsecExecuteFrts from VBIOS...\n");
     Status = FwsecExecuteFrts (
-      (UINT32)(UINTN)mMmioBase,  // BAR0 address
+      (UINT32)(UINTN)mMmioBase,
       VbiosData,
       VbiosSize,
       FrtsOffset
       );
     LogPrint (L"NVDAAL: FwsecExecuteFrts returned: %r\n", Status);
+
+method3_done:
+    ;  // Label requires a statement
   }
 
   FreePool (VbiosData);

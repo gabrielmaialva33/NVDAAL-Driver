@@ -24,7 +24,8 @@
 //==============================================================================
 
 // External logging function from NvdaalFwsec.c (variadic, writes to file)
-extern VOID EFIAPI LogPrint (IN CONST CHAR16 *Format, ...);
+// NOTE: Do NOT use EFIAPI - calling convention mismatch causes crashes
+extern VOID LogPrint (IN CONST CHAR16 *Format, ...);
 
 // Use LogPrint directly (simpler and guaranteed to work)
 #define LOG(fmt, ...)     LogPrint(L"NVDAAL: [FWSEC] " fmt L"\n", ##__VA_ARGS__)
