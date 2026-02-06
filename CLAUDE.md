@@ -76,10 +76,13 @@ Hardware:
 
 ### VBIOS / FWSEC
 
-- FWSEC-FRTS sets up WPR2 (Write Protected Region 2) for GSP
-- VBIOS parsed for: ROM headers (0x55AA), PCIR, BIT table, PMU Lookup Table
-- FWSEC image identified by PCIR codeType = 0xE0
-- DMEMMAPPER patched with command 0x15 (FRTS) before Falcon execution
+- FWSEC-FRTS sets up WPR2 (Write Protected Region 2) for GSP boot
+- FWSEC is embedded in VBIOS ROM, extracted at runtime via BIT table
+- Path: BIT header → Token 0x70 → Falcon Ucode Table → AppID 0x85
+- FWSEC runs on **GSP Falcon** (0x110000) in Heavy-Secure mode
+- Booter load/unload runs on **SEC2 Falcon** (0x840000)
+- DMEMMAPPER patched with command 0x15 (FRTS) or 0x19 (SB)
+- FRTS status: reg 0x001438 (upper 16 bits = error), WPR2: regs 0x1FA824/0x1FA828
 
 ### Memory Layout
 
