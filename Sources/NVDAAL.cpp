@@ -48,17 +48,25 @@ OSDefineMetaClassAndStructors(NVDAAL, IOService);
 // ============================================================================ 
 
 bool NVDAAL::init(OSDictionary *dictionary) {
+    // CRITICAL: Log FIRST before anything else to know we were called
+    IOLog("NVDAAL: >>>>>> init() CALLED <<<<<<\n");
+
     if (!super::init(dictionary)) {
+        IOLog("NVDAAL: init() - super::init failed\n");
         return false;
     }
 
     // Initialize configuration from boot-args (Lilu-style)
     nvdaalConfigInit();
+    IOLog("NVDAAL: init() - config initialized\n");
 
     // Check if we should load
+    IOLog("NVDAAL: init() - checking nvdaalShouldLoad()\n");
     if (!nvdaalShouldLoad()) {
+        IOLog("NVDAAL: init() - nvdaalShouldLoad() returned FALSE - ABORTING\n");
         return false;
     }
+    IOLog("NVDAAL: init() - nvdaalShouldLoad() returned TRUE\n");
 
     // Print banner
     IOLog(NVDAAL_BANNER);
@@ -107,13 +115,17 @@ void NVDAAL::free(void) {
 }
 
 IOService *NVDAAL::probe(IOService *provider, SInt32 *score) {
+    IOLog("NVDAAL: >>>>>> probe() CALLED <<<<<<\n");
+
     IOPCIDevice *device = OSDynamicCast(IOPCIDevice, provider);
     if (!device) {
+        IOLog("NVDAAL: probe() - provider is NOT an IOPCIDevice!\n");
         return nullptr;
     }
 
     // Check for NVIDIA vendor
     UInt32 vendorDevice = device->configRead32(0x00);
+    IOLog("NVDAAL: probe() - vendorDevice=0x%08x\n", vendorDevice);
     UInt16 vendorID = vendorDevice & 0xFFFF;
     UInt16 devID = (vendorDevice >> 16) & 0xFFFF;
 
@@ -137,16 +149,20 @@ IOService *NVDAAL::probe(IOService *provider, SInt32 *score) {
 }
 
 bool NVDAAL::start(IOService *provider) {
+    IOLog("NVDAAL: >>>>>> start() CALLED <<<<<<\n");
+
     if (!super::start(provider)) {
+        IOLog("NVDAAL: start() - super::start failed\n");
         return false;
     }
 
     pciDevice = OSDynamicCast(IOPCIDevice, provider);
     if (!pciDevice) {
-        NVDERR("start", "Failed to get PCI device");
+        IOLog("NVDAAL: start() - Failed to get PCI device\n");
         return false;
     }
 
+    IOLog("NVDAAL: start() - Got PCI device, proceeding...\n");
     NVDLOG("start", "========================================");
     NVDLOG("start", "Starting %s Compute Driver", nvdaalGetDeviceName(deviceId));
     NVDLOG("start", "========================================");

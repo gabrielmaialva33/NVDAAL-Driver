@@ -107,12 +107,13 @@ static inline void nvdaalConfigInit(void) {
         nvdaalConfig.safeMode = true;
     }
 
-    // Get kernel version
-    char osversion[64] = {0};
-    if (PE_parse_boot_argn("osversion", osversion, sizeof(osversion))) {
-        // Parse version string (e.g., "26.0.0")
-        sscanf(osversion, "%d.%d", &nvdaalConfig.kernelMajor, &nvdaalConfig.kernelMinor);
-    }
+    // Get kernel version - use version_major/version_minor from XNU
+    // PE_parse_boot_argn("osversion") often doesn't work
+    extern int version_major;
+    extern int version_minor;
+    nvdaalConfig.kernelMajor = version_major;
+    nvdaalConfig.kernelMinor = version_minor;
+    IOLog("NVDAAL: Detected kernel version: %d.%d\n", version_major, version_minor);
 
     // Set global debug state
     nvdaalLogLevel = (NVDAALLogLevel)nvdaalConfig.logLevel;
@@ -137,14 +138,20 @@ static inline bool nvdaalShouldLoad(void) {
     }
 
     // Check macOS version compatibility
-    // Supported: macOS 26+ (Tahoe)
-    const int MIN_KERNEL_MAJOR = 26;
+    // Supported: macOS 15+ (Sequoia) through 26+ (Tahoe)
+    IOLog("NVDAAL: Checking version: kernelMajor=%d, betaAllowed=%d\n",
+          nvdaalConfig.kernelMajor, nvdaalConfig.betaAllowed);
+
+    // XNU version_major: 24=Sequoia, 25=next, 26=Tahoe
+    // We support 24+ (Sequoia) and later
+    const int MIN_KERNEL_MAJOR = 24;  // macOS Sequoia
     if (nvdaalConfig.kernelMajor < MIN_KERNEL_MAJOR && !nvdaalConfig.betaAllowed) {
-        IOLog("NVDAAL: Unsupported macOS version %d.%d (use -nvdaalbeta)\n",
-              nvdaalConfig.kernelMajor, nvdaalConfig.kernelMinor);
+        IOLog("NVDAAL: Unsupported macOS version (kernel %d.%d, need %d+) - use -nvdaalbeta\n",
+              nvdaalConfig.kernelMajor, nvdaalConfig.kernelMinor, MIN_KERNEL_MAJOR);
         return false;
     }
 
+    IOLog("NVDAAL: Version check PASSED\n");
     return true;
 }
 
