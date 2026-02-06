@@ -2359,7 +2359,10 @@ bool NVDAALGsp::enqueueCommand(const void *msg, size_t size) {
 }
 
 bool NVDAALGsp::sendRpc(uint32_t function, const void *params, size_t paramsSize) {
-    if (!gspReady && function != NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO) {
+    // SET_SYSTEM_INFO and SET_REGISTRY are async RPCs queued BEFORE GSP boots
+    if (!gspReady &&
+        function != NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO &&
+        function != NV_VGPU_MSG_FUNCTION_SET_REGISTRY) {
         IOLog("NVDAAL-GSP: GSP not ready\n");
         return false;
     }
@@ -2553,23 +2556,194 @@ bool NVDAALGsp::rmFree(uint32_t hClient, uint32_t hParent, uint32_t hObject) {
 
 
 bool NVDAALGsp::sendSystemInfo(void) {
+    // ========================================================================
+    // THE MACUMBA - Make GSP firmware think we're running on Linux
+    // Source: rpcGspSetSystemInfo_v17_00() in NVIDIA open-gpu-kernel-modules
+    // ========================================================================
+
     GspSystemInfo info;
     memset(&info, 0, sizeof(info));
 
-    // Get PCI info from device
-    if (pciDevice) {
-        info.pciVendorId = pciDevice->configRead16(0x00);
-        info.pciDeviceId = pciDevice->configRead16(0x02);
-        info.pciSubVendorId = pciDevice->configRead16(0x2C);
-        info.pciSubDeviceId = pciDevice->configRead16(0x2E);
-        info.pciRevisionId = pciDevice->configRead8(0x08);
+    IOLog("NVDAAL-GSP: GspSystemInfo struct size: %lu bytes\n", (unsigned long)sizeof(info));
 
-        // Get BAR addresses
-        info.gpuPhysAddr = pciDevice->configRead32(0x10) & 0xFFFFFFF0;
-        info.fbPhysAddr = pciDevice->configRead32(0x14) & 0xFFFFFFF0;
+    if (!pciDevice) {
+        IOLog("NVDAAL-GSP: ERROR - no PCI device for system info\n");
+        return false;
     }
 
-    IOLog("NVDAAL-GSP: Sending system info (device 0x%04x)\n", info.pciDeviceId);
+    // ====================================================================
+    // Physical addresses (from PCI BARs)
+    // RTX 4090 uses 64-bit BARs: BAR0 @ 0x10-0x17, BAR1 @ 0x18-0x1F
+    // ====================================================================
+    uint32_t bar0Lo = pciDevice->configRead32(0x10);
+    uint32_t bar0Hi = pciDevice->configRead32(0x14);
+    uint32_t bar1Lo = pciDevice->configRead32(0x18);
+    uint32_t bar1Hi = pciDevice->configRead32(0x1C);
+
+    // Check if 64-bit BAR (bit 2:1 of BAR = 10b means 64-bit)
+    bool bar0is64 = ((bar0Lo & 0x6) == 0x4);
+    bool bar1is64 = ((bar1Lo & 0x6) == 0x4);
+
+    info.gpuPhysAddr = (uint64_t)(bar0Lo & 0xFFFFFFF0UL);
+    if (bar0is64) info.gpuPhysAddr |= ((uint64_t)bar0Hi << 32);
+
+    info.gpuPhysFbAddr = (uint64_t)(bar1Lo & 0xFFFFFFF0UL);
+    if (bar1is64) info.gpuPhysFbAddr |= ((uint64_t)bar1Hi << 32);
+
+    // Instance memory = same as BAR0 (MMIO) for Ada
+    info.gpuPhysInstAddr = info.gpuPhysAddr;
+    info.gpuPhysIoAddr = 0;  // Modern GPUs don't use I/O ports
+
+    IOLog("NVDAAL-GSP: BAR0 phys = 0x%llx, BAR1 phys = 0x%llx\n",
+          info.gpuPhysAddr, info.gpuPhysFbAddr);
+
+    // ====================================================================
+    // PCI Bus/Device/Function encoding
+    // Format: (domain << 32) | (bus << 8) | (device << 3) | function
+    // ====================================================================
+    // Read from IOPCIDevice properties
+    OSNumber *busNum = OSDynamicCast(OSNumber, pciDevice->getProperty("bus-number"));
+    OSNumber *devNum = OSDynamicCast(OSNumber, pciDevice->getProperty("device-number"));
+    OSNumber *funNum = OSDynamicCast(OSNumber, pciDevice->getProperty("function-number"));
+
+    uint32_t pciBus = busNum ? busNum->unsigned32BitValue() : 0;
+    uint32_t pciDev = devNum ? devNum->unsigned32BitValue() : 0;
+    uint32_t pciFun = funNum ? funNum->unsigned32BitValue() : 0;
+
+    info.nvDomainBusDeviceFunc = ((uint64_t)0 << 32) |
+                                 ((uint64_t)pciBus << 8) |
+                                 ((uint64_t)(pciDev & 0x1F) << 3) |
+                                 ((uint64_t)(pciFun & 0x7));
+
+    IOLog("NVDAAL-GSP: PCI BDF = %u:%u.%u (encoded 0x%llx)\n",
+          pciBus, pciDev, pciFun, info.nvDomainBusDeviceFunc);
+
+    // ====================================================================
+    // PCI identification
+    // ====================================================================
+    info.PCIDeviceID    = pciDevice->configRead16(0x02);      // 0x2684 for RTX 4090
+    info.PCISubDeviceID = pciDevice->configRead16(0x2E);      // 0x889D for ASUS ROG
+    info.PCIRevisionID  = pciDevice->configRead8(0x08);       // 0xA1
+
+    // ====================================================================
+    // Memory and VM layout
+    // ====================================================================
+    info.simAccessBufPhysAddr = 0;             // Not a simulator
+    info.notifyOpSharedSurfacePhysAddr = 0;    // Set later during RM init
+    info.pcieAtomicsOpMask = 0;                // PCIe atomics not configured
+    info.consoleMemSize = 0;                   // No console display (compute-only)
+
+    // KEY MACUMBA VALUE: Linux x86_64 maxUserVa = 0x00007FFFFFFFFFFF (47-bit)
+    info.maxUserVa = 0x00007FFFFFFFFFFFULL;
+
+    info.pciConfigMirrorBase = 0x88000;        // Standard PCI config mirror base
+    info.pciConfigMirrorSize = 0x1000;         // 4KB mirror
+
+    info.pcieAtomicsCplDeviceCapMask = 0;
+    info.oorArch = 0;
+
+    // ====================================================================
+    // Chipset info (Intel Z790 Raptor Lake)
+    // ====================================================================
+    info.clPdbProperties = 0;                  // No special chipset properties
+    info.Chipset = 0xA780;                     // Intel Z790 host bridge
+
+    info.bGpuBehindBridge = 1;                 // GPU is behind PCIe bridge
+    info.bFlrSupported = 1;                    // Function Level Reset
+    info.b64bBar0Supported = bar0is64 ? 1 : 0;
+    info.bMnocAvailable = 0;
+    info.chipsetL1ssEnable = 0;                // No L1 substates
+    info.bUpstreamL0sUnsupported = 0;
+    info.bUpstreamL1Unsupported = 0;
+    info.bUpstreamL1PorSupported = 0;
+    info.bUpstreamL1PorMobileOnly = 0;
+    info.bSystemHasMux = 0;                    // Desktop, no Optimus mux
+    info.upstreamAddressValid = 1;
+
+    // First Host Bridge bus info (Intel Z790)
+    info.FHBBusInfo.deviceID    = 0xA780;      // Z790 host bridge
+    info.FHBBusInfo.vendorID    = 0x8086;      // Intel
+    info.FHBBusInfo.subdeviceID = 0;
+    info.FHBBusInfo.subvendorID = 0x1043;      // ASUS
+    info.FHBBusInfo.revisionID  = 0x01;
+
+    // Chipset ID info (same as host bridge for desktop)
+    info.chipsetIDInfo.deviceID    = 0xA780;
+    info.chipsetIDInfo.vendorID    = 0x8086;
+    info.chipsetIDInfo.subdeviceID = 0;
+    info.chipsetIDInfo.subvendorID = 0x1043;
+    info.chipsetIDInfo.revisionID  = 0x01;
+
+    // ====================================================================
+    // ACPI data - zeroed (Hackintosh has no NVIDIA ACPI methods)
+    // ====================================================================
+    info.acpiMethodData.bValid = 0;            // No valid ACPI data
+
+    // ====================================================================
+    // THE CORE MACUMBA - Virtualization & OS flags
+    // These fields determine how GSP firmware behaves per platform
+    // ====================================================================
+
+    // Bare metal, not virtualized
+    info.hypervisorType = OS_HYPERVISOR_UNKNOWN;  // 4 = bare metal
+    info.virtualConfigBits = 0;
+    info.bIsPassthru = 0;                         // Not GPU passthrough
+
+    info.sysTimerOffsetNs = 0;                    // No timer offset
+
+    // SR-IOV not used on desktop
+    memset(&info.gspVFInfo, 0, sizeof(info.gspVFInfo));
+
+    // === PRIMARY OS FLAGS - THE REAL MACUMBA ===
+    info.bIsPrimary = 1;                               // Primary GPU
+    info.bIsUnixHdmiFrlComplianceEnabled = 1;           // Unix flag (Linux sets this)
+    info.isGridBuild = 0;                               // Not a GRID/vGPU build
+
+    // PCIe link capability (Gen4 x16)
+    info.pcieConfigReg.linkCap = 0x44;                  // Gen4 speed + x16 width
+    info.gridBuildCsp = 0;
+
+    // Feature flags
+    info.bPreserveVideoMemoryAllocations = 0;           // No suspend/resume
+    info.bTdrEventSupported = 0;                        // No TDR events (compute)
+    info.bFeatureStretchVblankCapable = 0;              // No display
+    info.bEnableDynamicGranularityPageArrays = 1;       // Linux enables this
+    info.bClockBoostSupported = 0;
+
+    // Host page size (same on Linux and macOS)
+    info.hostPageSize = 4096;
+
+    info.bIsCmcBasedHws = 0;
+
+    // *** CRITICAL MACUMBA FLAG ***
+    // On Windows: bGspNocatEnabled = true
+    // On Linux:   bGspNocatEnabled = false
+    // This is the #1 flag that distinguishes Windows from Linux in GSP!
+    info.bGspNocatEnabled = 0;                          // NOT Windows!
+
+    info.bS0ixSupport = 0;                              // No modern standby
+    info.bWindowChannelAlwaysMapped = 0;                // Linux doesn't set this
+
+    info.pciePowerControlValue = 0;
+    info.bPciePowerControlPresent = 0;
+
+    // ====================================================================
+    // Log the macumba summary
+    // ====================================================================
+    IOLog("NVDAAL-GSP: === MACUMBA GspSystemInfo ===\n");
+    IOLog("NVDAAL-GSP:   DeviceID=0x%04x SubDevice=0x%04x Rev=0x%02x\n",
+          info.PCIDeviceID, info.PCISubDeviceID, info.PCIRevisionID);
+    IOLog("NVDAAL-GSP:   maxUserVa=0x%llx hostPageSize=%llu\n",
+          info.maxUserVa, info.hostPageSize);
+    IOLog("NVDAAL-GSP:   hypervisor=%u bIsPrimary=%u bIsPassthru=%u\n",
+          info.hypervisorType, info.bIsPrimary, info.bIsPassthru);
+    IOLog("NVDAAL-GSP:   bGspNocatEnabled=%u (MUST be 0 for Linux)\n",
+          info.bGspNocatEnabled);
+    IOLog("NVDAAL-GSP:   bIsUnixHdmiFrl=%u isGridBuild=%u\n",
+          info.bIsUnixHdmiFrlComplianceEnabled, info.isGridBuild);
+    IOLog("NVDAAL-GSP:   Chipset=0x%04x FHB=0x%04x:0x%04x\n",
+          info.Chipset, info.FHBBusInfo.vendorID, info.FHBBusInfo.deviceID);
+    IOLog("NVDAAL-GSP: ==============================\n");
 
     return sendRpc(NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO, &info, sizeof(info));
 }

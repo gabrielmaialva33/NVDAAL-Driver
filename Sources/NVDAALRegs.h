@@ -328,25 +328,184 @@ typedef struct {
     uint64_t queueSize;       // Size of each queue
 } GspLibosInitArgs;
 
-// System info for GSP
-typedef struct {
-    uint64_t gpuPhysAddr;
-    uint64_t gpuPhysSize;
-    uint64_t fbPhysAddr;
-    uint64_t fbPhysSize;
-    uint32_t pciDomain;
-    uint32_t pciBus;
-    uint32_t pciDevice;
-    uint32_t pciFunction;
-    uint32_t pciVendorId;
-    uint32_t pciDeviceId;
-    uint32_t pciSubVendorId;
-    uint32_t pciSubDeviceId;
-    uint32_t pciRevisionId;
-    // ... more fields
-} GspSystemInfo;
-
 #pragma pack(pop)
+
+// ============================================================================
+// GspSystemInfo - Complete struct matching NVIDIA open-gpu-kernel-modules
+// Source: src/nvidia/inc/kernel/gpu/gsp/gsp_static_config.h
+// This is the "macumba" - we fill this with Linux-like values so the GSP
+// firmware thinks it's running on a Linux host instead of macOS.
+// ============================================================================
+
+// Hypervisor types (from nv-hypervisor.h)
+#define OS_HYPERVISOR_XEN              0
+#define OS_HYPERVISOR_VMWARE           1
+#define OS_HYPERVISOR_HYPERV           2
+#define OS_HYPERVISOR_KVM              3
+#define OS_HYPERVISOR_UNKNOWN          4  // Bare metal
+
+// Max ACPI display IDs
+#define NV_ACPI_MAX_DISPLAYS           16
+
+// BUSINFO (from g_chipset_nvoc.h)
+struct GspBusInfo {
+    uint16_t deviceID;
+    uint16_t vendorID;
+    uint16_t subdeviceID;
+    uint16_t subvendorID;
+    uint8_t  revisionID;
+};
+
+// ACPI Method Data sub-structures (from gpu_acpi_data.h)
+struct GspDodMethodData {
+    uint32_t status;
+    uint32_t acpiIdListLen;
+    uint32_t acpiIdList[NV_ACPI_MAX_DISPLAYS];
+};
+
+struct GspJtMethodData {
+    uint32_t status;
+    uint32_t jtCaps;
+    uint16_t jtRevId;
+    uint8_t  bSBIOSCaps;
+};
+
+struct GspMuxMethodDataElement {
+    uint32_t acpiId;
+    uint32_t mode;
+    uint32_t status;
+};
+
+struct GspMuxMethodData {
+    uint32_t tableLen;
+    GspMuxMethodDataElement acpiIdMuxModeTable[NV_ACPI_MAX_DISPLAYS];
+    GspMuxMethodDataElement acpiIdMuxPartTable[NV_ACPI_MAX_DISPLAYS];
+    GspMuxMethodDataElement acpiIdMuxStateTable[NV_ACPI_MAX_DISPLAYS];
+};
+
+struct GspCapsMethodData {
+    uint32_t status;
+    uint32_t optimusCaps;
+};
+
+struct GspAcpiMethodData {
+    uint8_t           bValid;
+    GspDodMethodData  dodMethodData;
+    GspJtMethodData   jtMethodData;
+    GspMuxMethodData  muxMethodData;
+    GspCapsMethodData capsMethodData;
+};
+
+// GSP VF Info (for SR-IOV, not used on desktop)
+struct GspVfInfo {
+    uint32_t totalVFs;
+    uint32_t firstVFOffset;
+    uint64_t FirstVFBar0Address;
+    uint64_t FirstVFBar1Address;
+    uint64_t FirstVFBar2Address;
+    uint8_t  b64bitBar0;
+    uint8_t  b64bitBar1;
+    uint8_t  b64bitBar2;
+};
+
+// GSP PCIe Config Register
+struct GspPcieConfigReg {
+    uint32_t linkCap;
+};
+
+// GspSystemInfo - The complete structure pushed from CPU-RM to GSP-RM
+// via RPC 0x15 (NV_VGPU_MSG_FUNCTION_GSP_SET_SYSTEM_INFO)
+// Field order and types MUST match NVIDIA's gsp_static_config.h exactly!
+typedef struct {
+    // Physical addresses (from PCI BARs)
+    uint64_t gpuPhysAddr;                          // BAR0 physical address (MMIO)
+    uint64_t gpuPhysFbAddr;                        // BAR1 physical address (VRAM)
+    uint64_t gpuPhysInstAddr;                      // Instance memory physical address
+    uint64_t gpuPhysIoAddr;                        // I/O port physical address
+    uint64_t nvDomainBusDeviceFunc;                // Encoded PCI domain:bus:dev.func
+    uint64_t simAccessBufPhysAddr;                 // Simulation buffer (0 for real HW)
+    uint64_t notifyOpSharedSurfacePhysAddr;        // Notify surface (0 initially)
+    uint64_t pcieAtomicsOpMask;                    // PCIe atomics capability
+    uint64_t consoleMemSize;                       // Console/display reserved VRAM
+    uint64_t maxUserVa;                            // Max user virtual address
+
+    // PCI config mirror
+    uint32_t pciConfigMirrorBase;
+    uint32_t pciConfigMirrorSize;
+
+    // PCI identification
+    uint32_t PCIDeviceID;
+    uint32_t PCISubDeviceID;
+    uint32_t PCIRevisionID;
+
+    // PCIe capabilities
+    uint32_t pcieAtomicsCplDeviceCapMask;
+    uint8_t  oorArch;                              // Out-of-reset architecture
+
+    // Chipset properties (from clSyncWithGsp)
+    uint64_t clPdbProperties;                      // Chipset PDB property bitmask
+    uint32_t Chipset;                              // Chipset PCI device ID
+
+    // PCIe topology flags
+    uint8_t  bGpuBehindBridge;
+    uint8_t  bFlrSupported;                        // Function Level Reset
+    uint8_t  b64bBar0Supported;
+    uint8_t  bMnocAvailable;
+    uint32_t chipsetL1ssEnable;
+    uint8_t  bUpstreamL0sUnsupported;
+    uint8_t  bUpstreamL1Unsupported;
+    uint8_t  bUpstreamL1PorSupported;
+    uint8_t  bUpstreamL1PorMobileOnly;
+    uint8_t  bSystemHasMux;                        // Optimus/mux switch
+    uint8_t  upstreamAddressValid;
+
+    // Chipset bus info
+    GspBusInfo       FHBBusInfo;                   // First Host Bridge
+    GspBusInfo       chipsetIDInfo;                // Chipset identification
+
+    // ACPI data (zeroed for Hackintosh - no NVIDIA ACPI methods)
+    GspAcpiMethodData acpiMethodData;
+
+    // Virtualization
+    uint32_t hypervisorType;                       // OS_HYPERVISOR_* enum
+    uint16_t virtualConfigBits;
+    uint8_t  bIsPassthru;                          // GPU passthrough flag
+
+    // Timer
+    uint64_t sysTimerOffsetNs;                     // System timer offset
+
+    // SR-IOV (not used on desktop)
+    GspVfInfo gspVFInfo;
+
+    // OS/platform flags - THE KEY "MACUMBA" FIELDS
+    uint8_t  bIsPrimary;                           // Primary GPU
+    uint8_t  bIsUnixHdmiFrlComplianceEnabled;      // Unix HDMI FRL flag (set on Linux)
+    uint8_t  isGridBuild;                          // GRID/vGPU build flag
+
+    // PCIe config
+    GspPcieConfigReg pcieConfigReg;
+    uint32_t gridBuildCsp;
+
+    // Feature flags
+    uint8_t  bPreserveVideoMemoryAllocations;
+    uint8_t  bTdrEventSupported;
+    uint8_t  bFeatureStretchVblankCapable;
+    uint8_t  bEnableDynamicGranularityPageArrays;
+    uint8_t  bClockBoostSupported;
+
+    // Host info
+    uint64_t hostPageSize;                         // 4096 on Linux/macOS
+
+    // More flags
+    uint8_t  bIsCmcBasedHws;
+    uint8_t  bGspNocatEnabled;                     // CRITICAL: only true on Windows!
+    uint8_t  bS0ixSupport;                         // Modern standby
+    uint8_t  bWindowChannelAlwaysMapped;
+
+    // PCIe power control
+    uint32_t pciePowerControlValue;
+    uint8_t  bPciePowerControlPresent;
+} GspSystemInfo;
 
 // ============================================================================
 // Helper Macros
