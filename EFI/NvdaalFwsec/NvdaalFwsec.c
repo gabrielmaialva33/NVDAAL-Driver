@@ -80,6 +80,7 @@ FwsecExecuteFrtsFromFile (
 #define FALCON_DMATRFCMD                0x0118
 #define FALCON_IMEMC(i)                 (0x0180 + (i) * 16)
 #define FALCON_IMEMD(i)                 (0x0184 + (i) * 16)
+#define FALCON_IMEMT(i)                 (0x0188 + (i) * 16)
 #define FALCON_DMEMC(i)                 (0x01C0 + (i) * 8)
 #define FALCON_DMEMD(i)                 (0x01C4 + (i) * 8)
 
