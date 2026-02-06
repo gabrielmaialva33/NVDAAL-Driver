@@ -284,7 +284,7 @@ FwsecVerifyWpr2 (
 
 /**
  * Complete FWSEC-FRTS execution sequence
- * Main entry point
+ * Main entry point (from VBIOS)
  */
 EFI_STATUS
 FwsecExecuteFrts (
@@ -295,12 +295,44 @@ FwsecExecuteFrts (
     );
 
 /**
+ * Complete FWSEC-FRTS execution from extracted file
+ * Loads FWSEC from pre-extracted fwsec.bin (FWSC format)
+ */
+EFI_STATUS
+FwsecExecuteFrtsFromFile (
+    IN  UINT32          Bar0,
+    IN  UINT8           *FwsecFileData,
+    IN  UINTN           FwsecFileSize,
+    IN  UINT64          FrtsOffset
+    );
+
+/**
  * Free context resources
  */
 VOID
 FwsecFreeContext (
     IN OUT FWSEC_CONTEXT *Context
     );
+
+//==============================================================================
+// FWSC File Format Header (output of extract_fwsec.py)
+//==============================================================================
+
+#define FWSC_MAGIC          0x43535746  // "FWSC" little-endian
+#define FWSC_VERSION        1
+#define FWSC_HEADER_SIZE    32
+
+#pragma pack(push, 1)
+typedef struct {
+    UINT32  Magic;              // "FWSC" = 0x43535746
+    UINT32  Version;            // = 1
+    UINT32  DescSize;           // V3 descriptor size (44)
+    UINT32  TotalDescSize;      // Descriptor + signatures size
+    UINT32  StoredSize;         // IMEM + DMEM size
+    UINT32  TotalPayloadSize;   // TotalDescSize + StoredSize
+    UINT8   Reserved[8];
+} FWSC_FILE_HEADER;
+#pragma pack(pop)
 
 //==============================================================================
 // GPU Register Access Helpers

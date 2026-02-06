@@ -24,12 +24,20 @@
 #include <Guid/FileInfo.h>
 #include <IndustryStandard/Pci.h>
 
-// Forward declaration of new FWSEC implementation
+// Forward declaration of FWSEC implementations
 EFI_STATUS
 FwsecExecuteFrts (
     IN  UINT32  Bar0,
     IN  UINT8   *VbiosData,
     IN  UINTN   VbiosSize,
+    IN  UINT64  FrtsOffset
+    );
+
+EFI_STATUS
+FwsecExecuteFrtsFromFile (
+    IN  UINT32  Bar0,
+    IN  UINT8   *FwsecFileData,
+    IN  UINTN   FwsecFileSize,
     IN  UINT64  FrtsOffset
     );
 
@@ -414,6 +422,128 @@ typedef struct {
 
 STATIC UINT8  *mScrubberData = NULL;
 STATIC UINTN  mScrubberSize = 0;
+
+// FWSEC firmware from file (extracted from NVGI container)
+STATIC UINT8  *mFwsecData = NULL;
+STATIC UINTN  mFwsecSize = 0;
+
+STATIC
+EFI_STATUS
+LoadFwsecFirmware (
+  VOID
+  )
+{
+  EFI_STATUS                       Status;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL  *FileSystem;
+  EFI_FILE_PROTOCOL                *Root;
+  EFI_FILE_PROTOCOL                *File;
+  EFI_HANDLE                       *HandleBuffer;
+  UINTN                            HandleCount;
+  UINTN                            Index;
+  EFI_FILE_INFO                    *FileInfo;
+  UINTN                            FileInfoSize;
+  UINT8                            FileInfoBuffer[256];
+
+  LogPrint (L"NVDAAL: Loading FWSEC firmware from EFI partition...\n");
+
+  Status = gBS->LocateHandleBuffer (
+                  ByProtocol,
+                  &gEfiSimpleFileSystemProtocolGuid,
+                  NULL,
+                  &HandleCount,
+                  &HandleBuffer
+                  );
+  if (EFI_ERROR (Status) || HandleCount == 0) {
+    LogPrint (L"NVDAAL: No file systems found for FWSEC\n");
+    return EFI_NOT_FOUND;
+  }
+
+  for (Index = 0; Index < HandleCount; Index++) {
+    Status = gBS->HandleProtocol (
+                    HandleBuffer[Index],
+                    &gEfiSimpleFileSystemProtocolGuid,
+                    (VOID **)&FileSystem
+                    );
+    if (EFI_ERROR (Status)) continue;
+
+    Status = FileSystem->OpenVolume (FileSystem, &Root);
+    if (EFI_ERROR (Status)) continue;
+
+    // Try to open fwsec.bin
+    Status = Root->Open (
+                     Root,
+                     &File,
+                     L"\\EFI\\OC\\NVDAAL\\fwsec.bin",
+                     EFI_FILE_MODE_READ,
+                     0
+                     );
+    if (EFI_ERROR (Status)) {
+      Root->Close (Root);
+      continue;
+    }
+
+    LogPrint (L"NVDAAL: Found fwsec.bin on FS %u\n", Index);
+
+    // Get file size
+    FileInfoSize = sizeof(FileInfoBuffer);
+    Status = File->GetInfo (File, &gEfiFileInfoGuid, &FileInfoSize, FileInfoBuffer);
+    if (EFI_ERROR (Status)) {
+      LogPrint (L"NVDAAL: Cannot get fwsec file info\n");
+      File->Close (File);
+      Root->Close (Root);
+      continue;
+    }
+
+    FileInfo = (EFI_FILE_INFO *)FileInfoBuffer;
+    mFwsecSize = (UINTN)FileInfo->FileSize;
+    LogPrint (L"NVDAAL: FWSEC file size: %u bytes\n", mFwsecSize);
+
+    // Validate minimum size (header + V3 descriptor)
+    if (mFwsecSize < 32 + 44) {
+      LogPrint (L"NVDAAL: FWSEC file too small\n");
+      File->Close (File);
+      Root->Close (Root);
+      continue;
+    }
+
+    // Allocate buffer
+    mFwsecData = AllocatePool (mFwsecSize);
+    if (mFwsecData == NULL) {
+      LogPrint (L"NVDAAL: Cannot allocate FWSEC buffer\n");
+      File->Close (File);
+      Root->Close (Root);
+      FreePool (HandleBuffer);
+      return EFI_OUT_OF_RESOURCES;
+    }
+
+    // Read file
+    Status = File->Read (File, &mFwsecSize, mFwsecData);
+    File->Close (File);
+    Root->Close (Root);
+
+    if (EFI_ERROR (Status)) {
+      LogPrint (L"NVDAAL: Failed to read fwsec.bin: %r\n", Status);
+      FreePool (mFwsecData);
+      mFwsecData = NULL;
+      continue;
+    }
+
+    // Validate FWSC magic
+    if (mFwsecSize >= 4 && *(UINT32 *)mFwsecData == 0x43535746) {
+      LogPrint (L"NVDAAL: FWSEC firmware loaded successfully (FWSC format)\n");
+      FreePool (HandleBuffer);
+      return EFI_SUCCESS;
+    } else {
+      LogPrint (L"NVDAAL: Invalid FWSC magic: 0x%08X\n", *(UINT32 *)mFwsecData);
+      FreePool (mFwsecData);
+      mFwsecData = NULL;
+    }
+  }
+
+  FreePool (HandleBuffer);
+  LogPrint (L"NVDAAL: FWSEC firmware not found\n");
+  return EFI_NOT_FOUND;
+}
 
 STATIC
 EFI_STATUS

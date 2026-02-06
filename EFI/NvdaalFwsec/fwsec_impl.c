@@ -889,6 +889,229 @@ cleanup:
 }
 
 //==============================================================================
+// FwsecParseFromFile - Parse FWSEC from extracted file (FWSC format)
+//==============================================================================
+
+EFI_STATUS
+FwsecParseFromFile (
+    OUT FWSEC_CONTEXT   *Context,
+    IN  UINT32          Bar0,
+    IN  UINT8           *FileData,
+    IN  UINTN           FileSize
+    )
+{
+    FWSC_FILE_HEADER    *FileHdr;
+    UINT8               *Payload;
+    UINT32              SigTotalSize;
+    UINT32              ImageOffset;
+
+    LOG(L"FwsecParseFromFile: FileData=%p Size=%u Bar0=0x%X",
+        FileData, FileSize, Bar0);
+
+    if (FileSize < FWSC_HEADER_SIZE + FALCON_UCODE_DESC_V3_SIZE) {
+        LOG_ERR(L"File too small: %u bytes", FileSize);
+        return EFI_INVALID_PARAMETER;
+    }
+
+    FileHdr = (FWSC_FILE_HEADER *)FileData;
+
+    // Validate magic
+    if (FileHdr->Magic != FWSC_MAGIC) {
+        LOG_ERR(L"Invalid FWSC magic: 0x%08X (expected 0x%08X)",
+                FileHdr->Magic, FWSC_MAGIC);
+        return EFI_INVALID_PARAMETER;
+    }
+
+    if (FileHdr->Version != FWSC_VERSION) {
+        LOG_ERR(L"Unsupported FWSC version: %u", FileHdr->Version);
+        return EFI_INVALID_PARAMETER;
+    }
+
+    LOG(L"FWSC header: descSize=%u totalDescSize=%u storedSize=%u payload=%u",
+        FileHdr->DescSize, FileHdr->TotalDescSize,
+        FileHdr->StoredSize, FileHdr->TotalPayloadSize);
+
+    // Validate sizes
+    if (FWSC_HEADER_SIZE + FileHdr->TotalPayloadSize > FileSize) {
+        LOG_ERR(L"File truncated: need %u, have %u",
+                FWSC_HEADER_SIZE + FileHdr->TotalPayloadSize, FileSize);
+        return EFI_INVALID_PARAMETER;
+    }
+
+    // Payload starts after the FWSC header
+    Payload = FileData + FWSC_HEADER_SIZE;
+
+    ZeroMem(Context, sizeof(FWSEC_CONTEXT));
+    Context->Bar0 = Bar0;
+
+    // Copy V3 descriptor
+    if (FileHdr->DescSize != FALCON_UCODE_DESC_V3_SIZE) {
+        LOG_ERR(L"Unexpected desc size: %u (expected %u)",
+                FileHdr->DescSize, FALCON_UCODE_DESC_V3_SIZE);
+        return EFI_INVALID_PARAMETER;
+    }
+
+    CopyMem(&Context->UcodeDesc, Payload, FALCON_UCODE_DESC_V3_SIZE);
+
+    LOG(L"V3 Descriptor loaded:");
+    LOG(L"  StoredSize: 0x%X (%u)", Context->UcodeDesc.StoredSize, Context->UcodeDesc.StoredSize);
+    LOG(L"  PKCDataOffset: 0x%X", Context->UcodeDesc.PKCDataOffset);
+    LOG(L"  InterfaceOffset: 0x%X", Context->UcodeDesc.InterfaceOffset);
+    LOG(L"  IMEM: phys=0x%X load=0x%X virt=0x%X",
+        Context->UcodeDesc.IMEMPhysBase, Context->UcodeDesc.IMEMLoadSize,
+        Context->UcodeDesc.IMEMVirtBase);
+    LOG(L"  DMEM: phys=0x%X load=0x%X",
+        Context->UcodeDesc.DMEMPhysBase, Context->UcodeDesc.DMEMLoadSize);
+    LOG(L"  EngineIdMask: 0x%04X, UcodeId: %u",
+        Context->UcodeDesc.EngineIdMask, Context->UcodeDesc.UcodeId);
+    LOG(L"  SigCount: %u, SigVersions: 0x%04X",
+        Context->UcodeDesc.SignatureCount, Context->UcodeDesc.SignatureVersions);
+
+    // Signatures are between descriptor and image data
+    SigTotalSize = FileHdr->TotalDescSize - FALCON_UCODE_DESC_V3_SIZE;
+    Context->SignaturesTotalSize = SigTotalSize;
+
+    if (SigTotalSize > 0) {
+        Context->Signatures = AllocatePool(SigTotalSize);
+        if (Context->Signatures == NULL) {
+            return EFI_OUT_OF_RESOURCES;
+        }
+        CopyMem(Context->Signatures, Payload + FALCON_UCODE_DESC_V3_SIZE, SigTotalSize);
+        LOG(L"Signatures: %u bytes (%u signatures of %u bytes each)",
+            SigTotalSize, SigTotalSize / RSA3K_SIGNATURE_SIZE, RSA3K_SIGNATURE_SIZE);
+    }
+
+    // IMEM and DMEM follow after TotalDescSize
+    ImageOffset = FileHdr->TotalDescSize;
+    Context->ImemSize = Context->UcodeDesc.IMEMLoadSize;
+    Context->DmemSize = Context->UcodeDesc.DMEMLoadSize;
+
+    LOG(L"Image at payload offset 0x%X: IMEM=%u DMEM=%u",
+        ImageOffset, Context->ImemSize, Context->DmemSize);
+
+    // Validate
+    if (ImageOffset + Context->ImemSize + Context->DmemSize > FileHdr->TotalPayloadSize) {
+        LOG_ERR(L"Image extends beyond payload");
+        return EFI_INVALID_PARAMETER;
+    }
+
+    // Allocate and copy IMEM
+    if (Context->ImemSize > 0) {
+        Context->ImemData = AllocatePool(Context->ImemSize);
+        if (Context->ImemData == NULL) {
+            return EFI_OUT_OF_RESOURCES;
+        }
+        CopyMem(Context->ImemData, Payload + ImageOffset, Context->ImemSize);
+        LOG(L"IMEM loaded: %u bytes", Context->ImemSize);
+    }
+
+    // Allocate and copy DMEM (working copy for patching)
+    if (Context->DmemSize > 0) {
+        Context->DmemData = AllocatePool(Context->DmemSize);
+        if (Context->DmemData == NULL) {
+            return EFI_OUT_OF_RESOURCES;
+        }
+        CopyMem(Context->DmemData, Payload + ImageOffset + Context->ImemSize, Context->DmemSize);
+        LOG(L"DMEM loaded: %u bytes", Context->DmemSize);
+
+        // Dump APPIF header at InterfaceOffset for debugging
+        if (Context->UcodeDesc.InterfaceOffset + 4 <= Context->DmemSize) {
+            UINT8 *Appif = Context->DmemData + Context->UcodeDesc.InterfaceOffset;
+            LOG_DBG(L"APPIF @ DMEM[0x%X]: ver=%u hdr=%u entry=%u count=%u",
+                    Context->UcodeDesc.InterfaceOffset,
+                    Appif[0], Appif[1], Appif[2], Appif[3]);
+        }
+    }
+
+    // Read fuse version for signature selection
+    Context->FuseVersion = (UINT8)FwsecReadFuseVersion(Bar0, Context->UcodeDesc.UcodeId);
+
+    LOG(L"FWSEC context ready: fuseVersion=%u", Context->FuseVersion);
+    return EFI_SUCCESS;
+}
+
+//==============================================================================
+// FwsecExecuteFrtsFromFile - Execute FWSEC-FRTS from extracted file
+//==============================================================================
+
+EFI_STATUS
+FwsecExecuteFrtsFromFile (
+    IN  UINT32  Bar0,
+    IN  UINT8   *FwsecFileData,
+    IN  UINTN   FwsecFileSize,
+    IN  UINT64  FrtsOffset
+    )
+{
+    EFI_STATUS      Status;
+    FWSEC_CONTEXT   Context;
+
+    LOG(L"=== FWSEC-FRTS Execution from File ===");
+    LOG(L"File: %u bytes, FRTS offset: 0x%llX", FwsecFileSize, FrtsOffset);
+
+    // Step 1: Parse FWSEC from file
+    LOG(L"Step 1: Parsing FWSEC from file...");
+    Status = FwsecParseFromFile(&Context, Bar0, FwsecFileData, FwsecFileSize);
+    if (EFI_ERROR(Status)) {
+        LOG_ERR(L"Failed to parse FWSEC file: %r", Status);
+        return Status;
+    }
+
+    // Step 2: Select signature based on fuse version
+    LOG(L"Step 2: Selecting signature (fuse version %d)...", Context.FuseVersion);
+    Status = FwsecSelectSignature(&Context);
+    if (EFI_ERROR(Status)) {
+        LOG_ERR(L"Failed to select signature: %r", Status);
+        goto cleanup;
+    }
+
+    // Step 3: Patch signature into DMEM
+    LOG(L"Step 3: Patching signature...");
+    Status = FwsecPatchSignature(&Context);
+    if (EFI_ERROR(Status)) {
+        LOG_ERR(L"Failed to patch signature: %r", Status);
+        goto cleanup;
+    }
+
+    // Step 4: Patch FRTS command into DMEMMAPPER
+    LOG(L"Step 4: Patching FRTS command...");
+    Status = FwsecPatchFrtsCmd(&Context, FrtsOffset);
+    if (EFI_ERROR(Status)) {
+        LOG_ERR(L"Failed to patch FRTS command: %r", Status);
+        goto cleanup;
+    }
+
+    // Step 5: Load ucode into Falcon
+    LOG(L"Step 5: Loading ucode...");
+    Status = FwsecLoadUcode(&Context);
+    if (EFI_ERROR(Status)) {
+        LOG_ERR(L"Failed to load ucode: %r", Status);
+        goto cleanup;
+    }
+
+    // Step 6: Execute Falcon
+    LOG(L"Step 6: Executing FWSEC...");
+    Status = FwsecExecute(&Context);
+    if (EFI_ERROR(Status)) {
+        LOG_ERR(L"FWSEC execution failed: %r", Status);
+        goto cleanup;
+    }
+
+    // Step 7: Verify WPR2
+    LOG(L"Step 7: Verifying WPR2...");
+    Status = FwsecVerifyWpr2(&Context);
+    if (EFI_ERROR(Status)) {
+        LOG_ERR(L"WPR2 verification failed: %r", Status);
+        goto cleanup;
+    }
+
+    LOG(L"=== FWSEC-FRTS from File: Success! WPR2 Configured ===");
+
+cleanup:
+    FwsecFreeContext(&Context);
+    return Status;
+}
+
+//==============================================================================
 // FwsecFreeContext
 //==============================================================================
 
