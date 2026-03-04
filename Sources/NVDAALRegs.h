@@ -768,18 +768,85 @@ struct FalconUcodeDescV3 {
     uint32_t flags;
 };
 
-// DMEMMAPPER Interface Structure
+// DMEMMAPPER Interface Structure (64 bytes total, version 3 on Ada Lovelace)
+// Raw layout verified against RTX 4090 VBIOS (DMAP at 0x043B9C):
+//   +0x00: "DMAP"  +0x04: ver=3  +0x06: size=64  +0x08: cmdBufOff  +0x0C: cmdBufSize
+//   +0x10: dataBufOff  +0x14: dataBufSize  +0x18: initCmd  +0x1C..+0x38: reserved
+//   +0x3C: interfaceOffset
 struct DmemMapperHeader {
-    uint32_t signature;       // "DMAP"
-    uint16_t version;
-    uint16_t size;
-    uint32_t cmdBufOffset;
-    uint32_t cmdBufSize;
-    uint32_t dataBufOffset;
-    uint32_t dataBufSize;
-    uint32_t initCmd;         // Command to execute (patch with 0x15 for FRTS)
-    uint32_t reserved[8];
+    uint32_t signature;       // +0x00: "DMAP" (0x50414D44)
+    uint16_t version;         // +0x04: 3 on Ada Lovelace
+    uint16_t size;            // +0x06: 64 (0x40)
+    uint32_t cmdBufOffset;    // +0x08: FRTS=0xD40, SB=0x26D0
+    uint32_t cmdBufSize;      // +0x0C: 64 bytes
+    uint32_t dataBufOffset;   // +0x10: FRTS=0x01000000, SB=0x2710
+    uint32_t dataBufSize;     // +0x14: 256 bytes
+    uint32_t initCmd;         // +0x18: FRTS=0xF00, SB=0x2810
+    uint32_t reserved[8];     // +0x1C..+0x38: implementation-specific fields
+    uint32_t interfaceOffset; // +0x3C: FWSEC-FRTS=0xD2C, FWSEC-SB=0xC18
 };
+
+// ============================================================================
+// Ada Lovelace Falcon Ucode Descriptor (AD10x proprietary format)
+// Discovered via VBIOS reverse engineering of RTX 4090 (VBIOS 95.02.18.80)
+// This format replaces the standard PMU lookup table on Ada Lovelace.
+// Found by scanning for DMAP signatures and device ID 0x2684.
+// ============================================================================
+
+// Ada Falcon Descriptor Pre-header (8 bytes, precedes descriptor body)
+struct AdaFalconDescPreHeader {
+    uint8_t  version;         // 0x01
+    uint8_t  reserved;        // 0x00
+    uint16_t typeFlags;       // 0x0010 for FWSEC
+    uint16_t dataSize;        // IMEM/DMEM related size
+    uint16_t headerSize;      // 0x0020 (32 bytes) for the body that follows
+} __attribute__((packed));
+
+// Ada Falcon Descriptor Body (variable size, follows pre-header)
+// Total body size = pre-header.headerSize (typically 32 bytes)
+struct AdaFalconDescBody {
+    uint16_t version;         // 3 for Ada
+    uint16_t deviceId;        // 0x2684 for RTX 4090
+    // Variable-length zero padding follows (16 bytes for FWSEC-FRTS, 4 for FWSEC-SB)
+    // Then packed info + size fields
+} __attribute__((packed));
+
+// Ada Falcon Descriptor Packed Info (4 bytes)
+struct AdaFalconDescPackedInfo {
+    uint8_t  signatureVersions; // Bitmask of fuse versions (typically 1)
+    uint8_t  ucodeId;           // 0x04 = GSP/FWSEC
+    uint8_t  engineIdMask;      // 0x08 = GSP Falcon
+    uint8_t  signatureCount;    // 2 for RTX 4090
+} __attribute__((packed));
+
+// Ada Falcon Descriptor Size Fields (16 bytes, follows packed info)
+struct AdaFalconDescSizeFields {
+    uint32_t fieldA;            // 4 (unknown purpose)
+    uint32_t codeSize;          // IMEM code size
+    uint32_t fieldB;            // 5 (unknown purpose)
+    uint32_t interfaceOffset;   // DMAP position in DMEM
+} __attribute__((packed));
+
+// FWSEC image locations in VBIOS (RTX 4090, VBIOS 95.02.18.80.87)
+#define FWSEC_FRTS_DESC_OFFSET       0x0430BC
+#define FWSEC_FRTS_DMAP_OFFSET       0x043B9C
+#define FWSEC_FRTS_COPY_DESC_OFFSET  0x053368
+#define FWSEC_FRTS_COPY_DMAP_OFFSET  0x053E48
+#define FWSEC_SB_DESC_OFFSET         0x0699B0
+#define FWSEC_SB_DMAP_OFFSET         0x06A37C
+#define FWSEC_SB_COPY_DESC_OFFSET    0x070104
+#define FWSEC_SB_COPY_DMAP_OFFSET    0x070AD0
+
+// Ada FWSEC-FRTS specific values
+#define FWSEC_FRTS_IMEM_CODE_SIZE    0x0AE0   // 2784 bytes
+#define FWSEC_FRTS_INTERFACE_OFFSET  0x0D2C   // 3372 bytes
+#define FWSEC_SB_IMEM_CODE_SIZE      0x09CC   // 2508 bytes
+#define FWSEC_SB_INTERFACE_OFFSET    0x0C18   // 3096 bytes
+
+// Ada Falcon descriptor pre-header pattern for scanning
+#define ADA_FALCON_DESC_VERSION      0x01
+#define ADA_FALCON_DESC_TYPE_FWSEC   0x0010
+#define ADA_FALCON_DESC_HEADER_SIZE  0x0020
 
 // ============================================================================
 // FALCON_UCODE_DESC_V3_NVIDIA - From NVIDIA open-gpu-kernel-modules
