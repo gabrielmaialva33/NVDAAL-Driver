@@ -35,6 +35,28 @@ Firmware/*.bin
 Firmware/*.rom
 !Firmware/README.md
 
+# Reverse engineering binaries (too large for git, user must extract their own)
+ReverseEng/*.bin
+ReverseEng/*.rom
+
+# Test environment build artifacts
+TestEnv/userspace/test_vbios_parse
+TestEnv/userspace/test_gsp_firmware
+TestEnv/userspace/test_rpc_structs
+TestEnv/userspace/test_register_read
+TestEnv/kmod/*.ko
+TestEnv/kmod/*.mod
+TestEnv/kmod/*.mod.c
+TestEnv/kmod/*.mod.o
+TestEnv/kmod/*.o
+TestEnv/kmod/modules.order
+TestEnv/kmod/Module.symvers
+TestEnv/kmod/.tmp_versions/
+TestEnv/kmod/.*.cmd
+
+# Nouveau reference (sparse git clone, user can re-fetch)
+TestEnv/nouveau-ref/
+
 # Logs
 *.log
 
