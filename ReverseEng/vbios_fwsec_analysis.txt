@@ -1,0 +1,726 @@
+================================================================================
+NVIDIA RTX 4090 (AD102) Full VBIOS FWSEC Analysis
+Generated: 2026-03-04 06:40:11
+ROM: /home/gabriel-maia/Documentos/NVDAAL-Driver/ReverseEng/vbios_full.rom
+================================================================================
+
+ROM size: 1011712 bytes (988.0 KB / 0xF7000)
+
+================================================================================
+SECTION 1: PCI ROM IMAGES
+================================================================================
+
+  Image #1: 0x000000 - 0x00FC00 (63.0 KB)
+    Vendor: 0x10DE  Device: 0x2684  Code: x86/AT (Legacy BIOS)
+    Last Image: False
+
+  Image #2: 0x00FC00 - 0x024A00 (83.5 KB)
+    Vendor: 0x10DE  Device: 0x2684  Code: UEFI
+    Last Image: True
+
+  ROM Mirror at 0x0E0000 (exact copy of first 64KB image)
+
+================================================================================
+SECTION 2: BIT HEADER AND TOKENS
+================================================================================
+
+  BIT Header at: 0x0001B0
+  Signature: ff b8 42 49 54 00
+
+  Header Size: 12 bytes (from 0x1B0)
+  Token Size: 6 bytes
+  Token Count: 19
+  Token Table: 0x01BC
+
+  Token # 0: ID=0x32 (DEVINIT_PTRS        ) Ver=1 Size=   4 Data=0x023E
+  Token # 1: ID=0x42 (BIOSDATA            ) Ver=2 Size=  37 Data=0x024A
+  Token # 2: ID=0x43 (CLOCK               ) Ver=2 Size=  44 Data=0x026F
+  Token # 3: ID=0x44 (DFP                 ) Ver=1 Size=   4 Data=0x029B
+  Token # 4: ID=0x49 (INIT                ) Ver=1 Size=  36 Data=0x029F
+  Token # 5: ID=0x4D (MEMORY              ) Ver=2 Size=  41 Data=0x02C3
+  Token # 6: ID=0x4E (NOP                 ) Ver=0 Size=   0 Data=0x0000
+  Token # 7: ID=0x50 (PERF                ) Ver=2 Size= 252 Data=0x02EC
+  Token # 8: ID=0x53 (STRING              ) Ver=2 Size=  24 Data=0x03E8
+  Token # 9: ID=0x54 (TMDS                ) Ver=1 Size=   2 Data=0x0400
+  Token #10: ID=0x55 (USB                 ) Ver=1 Size=   5 Data=0x040A
+  Token #11: ID=0x56 (VIRTUAL             ) Ver=1 Size=   6 Data=0x040F
+  Token #12: ID=0x78 (EXTDEV (x)          ) Ver=1 Size=   8 Data=0x0415
+  Token #13: ID=0x64 (DISPLAY (d)         ) Ver=1 Size=   2 Data=0x041D
+  Token #14: ID=0x70 (FALCON_DATA         ) Ver=2 Size=   4 Data=0x041F
+    ** Falcon Ucode Table Pointer: 0x00080DE8 **
+  Token #15: ID=0x75 (GPU_INFO (u)        ) Ver=1 Size=  17 Data=0x0423
+  Token #16: ID=0x69 (BIOS_INFO (i)       ) Ver=2 Size= 110 Data=0x0434
+  Token #17: ID=0x45 (DISPLAY_EAGLE (E)   ) Ver=1 Size=   4 Data=0x0402
+  Token #18: ID=0x73 (SEC_VER (s)         ) Ver=1 Size=   4 Data=0x0406
+
+================================================================================
+SECTION 3: FALCON UCODE TABLE POINTER (0x080DE8)
+================================================================================
+
+  BIT Token 0x70 points to: 0x080DE8
+  Data at that offset:
+    00080DE8: E7 8F 84 00 E7 8F 84 00 E7 8F 84 00 E7 8F 84 00  ................
+    00080DF8: E7 8F 60 00 E7 8F 60 00 E7 8F 64 00 E7 8F 64 00  ..`...`...d...d.
+    00080E08: E7 8F 64 00 E7 8F 64 00 E7 8F 64 00 E7 8F 64 00  ..d...d...d...d.
+    00080E18: E7 8F 64 00 E7 8F 64 00 E7 8F 64 00 E7 8F 64 00  ..d...d...d...d.
+
+  ANALYSIS: This region contains repetitive 4-byte patterns (E7 8F XX 00)
+  consistent with Falcon engine register/PLL programming data, NOT a standard
+  lookup table header. This is characteristic of Ada Lovelace (AD10x) VBIOS
+  where the falcon ucode data is stored in a proprietary format embedded
+  within the NV data region, not in a simple indexed table.
+
+  The falcon ucode images (FWSEC, etc.) were found by alternative means
+  (scanning for DMAP signatures and device ID 0x2684) as detailed below.
+
+================================================================================
+SECTION 4: NV DATA REGION OVERVIEW
+================================================================================
+
+  NV Region Start: 0x024A00
+  Signature: 56 4e ('VN')
+
+  Last non-0xFF byte: 0x0F6BFF (987.0 KB)
+  Usable ROM: 0x000000 - 0x0F6BFF
+  Empty (0xFF): 0x0F6C00 - 0x0F7000 (1.0 KB)
+
+  ROM Layout:
+    0x000000 - 0x00FC00: x86/AT BIOS image (63 KB)
+    0x00FC00 - 0x024A00: UEFI image (83.5 KB)
+    0x024A00 - 0x09FFFF: NV proprietary data (485 KB)
+      0x024A00 - 0x02FFFF: Init scripts, tables, pointers
+      0x030000 - 0x043BFF: Falcon ucode image #1 (FWSEC-FRTS)
+      0x043C00 - 0x053EFF: Falcon ucode image #2 (FWSEC-FRTS copy)
+      0x053F00 - 0x06A3FF: Falcon ucode image #3 (FWSEC-SB)
+      0x06A400 - 0x070B3F: Falcon ucode image #4 (FWSEC-SB copy)
+      0x070B40 - 0x09FFFF: Devinit scripts, PLL tables, memory timing
+    0x0A0000 - 0x0DFFFF: Empty (0xFF padding)
+    0x0E0000 - 0x0EFBFF: ROM mirror (copy of x86/AT image)
+    0x0F0000 - 0x0F6BFF: Additional data / NVGI
+    0x0F6C00 - 0x0F6FFF: Empty (0xFF padding)
+
+  Entropy Analysis (higher = more random/encrypted):
+    x86/AT image                   (0x000000-0x00FC00): H = 3.982 bits/byte
+    UEFI image                     (0x00FC00-0x024A00): H = 7.996 bits/byte
+    NV headers/init                (0x024A00-0x030000): H = 7.432 bits/byte
+    Falcon ucode #1 region         (0x030000-0x043C00): H = 7.874 bits/byte
+    Falcon ucode #2 region         (0x043C00-0x054000): H = 7.933 bits/byte
+    Falcon ucode #3 region         (0x054000-0x06A400): H = 7.163 bits/byte
+    Falcon ucode #4 region         (0x06A400-0x070C00): H = 7.844 bits/byte
+    Post-ucode NV data             (0x070C00-0x0A0000): H = 4.481 bits/byte
+
+================================================================================
+SECTION 5: DMEMMAPPER (DMAP) STRUCTURES
+================================================================================
+
+  Found 4 DMAP signatures: ['0x043B9C', '0x053E48', '0x06A37C', '0x070AD0']
+
+  DMAP #1 at 0x043B9C [FWSEC-FRTS (WPR2 Setup)] (primary)
+    Version:         3
+    Size:            64 bytes
+    cmdBufOffset:    0x00000D40
+    cmdBufSize:      64 bytes
+    dataBufOffset:   0x01000000
+    dataBufSize:     256 bytes
+    initCmd:         0x00000F00
+    interfaceOffset: 0x00000D2C (stored at DMAP+0x3C)
+    Raw:
+      00043B9C: 44 4D 41 50 03 00 40 00 40 0D 00 00 40 00 00 00  DMAP..@.@...@...
+      00043BAC: 00 00 00 01 00 01 00 00 00 0F 00 00 00 26 00 00  .............&..
+      00043BBC: 00 00 00 00 48 03 00 00 50 03 00 00 00 00 00 00  ....H...P.......
+      00043BCC: 04 00 00 00 00 40 04 00 00 00 00 00 2C 0D 00 00  .....@......,...
+
+  DMAP #2 at 0x053E48 [FWSEC-FRTS (WPR2 Setup)] (redundant copy)
+    Version:         3
+    Size:            64 bytes
+    cmdBufOffset:    0x00000D40
+    cmdBufSize:      64 bytes
+    dataBufOffset:   0x01000000
+    dataBufSize:     256 bytes
+    initCmd:         0x00000F00
+    interfaceOffset: 0x00000D2C (stored at DMAP+0x3C)
+    Raw:
+      00053E48: 44 4D 41 50 03 00 40 00 40 0D 00 00 40 00 00 00  DMAP..@.@...@...
+      00053E58: 00 00 00 01 00 01 00 00 00 0F 00 00 00 26 00 00  .............&..
+      00053E68: 00 00 00 00 48 03 00 00 50 03 00 00 00 00 00 00  ....H...P.......
+      00053E78: 04 00 00 00 00 40 04 00 00 00 00 00 2C 0D 00 00  .....@......,...
+
+  DMAP #3 at 0x06A37C [FWSEC-SB (Secure Boot)] (primary)
+    Version:         3
+    Size:            64 bytes
+    cmdBufOffset:    0x000026D0
+    cmdBufSize:      64 bytes
+    dataBufOffset:   0x00002710
+    dataBufSize:     256 bytes
+    initCmd:         0x00002810
+    interfaceOffset: 0x00000C18 (stored at DMAP+0x3C)
+    Raw:
+      0006A37C: 44 4D 41 50 03 00 40 00 D0 26 00 00 40 00 00 00  DMAP..@..&..@...
+      0006A38C: 10 27 00 00 00 01 00 00 10 28 00 00 00 26 00 00  .'.......(...&..
+      0006A39C: 00 00 00 00 48 03 00 00 50 03 00 00 00 00 00 00  ....H...P.......
+      0006A3AC: 04 00 00 00 00 40 04 00 00 00 00 00 18 0C 00 00  .....@..........
+
+  DMAP #4 at 0x070AD0 [FWSEC-SB (Secure Boot)] (redundant copy)
+    Version:         3
+    Size:            64 bytes
+    cmdBufOffset:    0x000026D0
+    cmdBufSize:      64 bytes
+    dataBufOffset:   0x00002710
+    dataBufSize:     256 bytes
+    initCmd:         0x00002810
+    interfaceOffset: 0x00000C18 (stored at DMAP+0x3C)
+    Raw:
+      00070AD0: 44 4D 41 50 03 00 40 00 D0 26 00 00 40 00 00 00  DMAP..@..&..@...
+      00070AE0: 10 27 00 00 00 01 00 00 10 28 00 00 00 26 00 00  .'.......(...&..
+      00070AF0: 00 00 00 00 48 03 00 00 50 03 00 00 00 00 00 00  ....H...P.......
+      00070B00: 04 00 00 00 00 40 04 00 00 00 00 00 18 0C 00 00  .....@..........
+
+================================================================================
+SECTION 6: FALCON UCODE DESCRIPTORS (Ada Lovelace / AD10x Format)
+================================================================================
+
+  NOTE: On Ada Lovelace GPUs, the falcon ucode descriptors use a
+  proprietary format different from the documented FalconUcodeDescV3Nvidia.
+  The descriptors were found by searching for the RTX 4090 device ID (0x2684)
+  pattern near DMAP structures.
+
+  Found 4 Falcon Ucode Descriptors with pre-header:
+
+  --- Falcon Ucode Descriptor #1 at 0x0430BC ---
+
+    Pre-header (8 bytes):
+      version:          1
+      type/flags:       0x0010
+      dataSize:         0x0AB4 (2740 bytes)
+      headerSize:       0x0020 (32 bytes)
+
+    Descriptor Header:
+      version:          3
+      deviceId:         0x2684 (RTX 4090)
+
+    Packed Info (at 0x0430D8, 16 zero bytes before):
+      signatureVersions: 1
+      ucodeId:           0x04 (4 = GSP/FWSEC)
+      engineIdMask:      0x08 (GSP)
+      signatureCount:    2
+
+    Size Fields:
+      fieldA:            4
+      codeSize (IMEM):   0x0AE0 (2784 bytes)
+      fieldB:            5
+      interfaceOffset:   0x0D2C (3372 bytes)
+
+    RSA-3K Signatures:
+      Start:    0x0430EC
+      Count:    2
+      Size:     2 x 384 = 768 bytes
+      End:      0x0433EC
+
+      Sig #0: 0x0430EC - first 16: 7a 1c d4 88 b9 bc cc a9 5a 5a 1c 72 4e 82 78 7d
+      Sig #1: 0x04326C - first 16: 7f d1 6d 5a bf f7 d0 46 79 a3 1f 53 ae b0 f8 80
+
+    Data Section (after signatures):
+      Start: 0x0433EC
+      First 64 bytes:
+        000433EC: 4A 75 6C 20 32 37 20 32 30 32 32 00 32 30 3A 34  Jul 27 2022.20:4
+        000433FC: 37 3A 32 35 00 00 00 00 30 03 00 00 3C 03 00 00  7:25....0...<...
+        0004340C: 30 00 00 00 40 00 00 00 FF FF FF FF 92 01 00 00  0...@...........
+        0004341C: 94 01 00 00 93 01 00 00 96 01 00 00 97 01 00 00  ................
+
+    Matching DMAP at 0x043B9C (FWSEC-FRTS (WPR2 Setup))
+      Distance from data_start to DMAP: 0x7B0 (1968 bytes)
+      DMAP interfaceOffset = 0xD2C
+
+    Memory Layout (computed from DMAP position and entropy analysis):
+      IMEM (code): Encrypted, stored at ~0x034000 - 0x043000 (~60 KB block)
+                   Loaded via DMA/ACR, NOT directly accessible
+                   Code size in descriptor: 0x0AE0 (2784 bytes)
+      DMEM (data): Stored at 0x0433EC - 0x043BDC (0x7F0 = 2032 bytes)
+                   First 0x57C bytes of DMEM are BSS (zero-init at runtime)
+                   Stored data maps to DMEM offsets 0x57C - 0xD6C
+      DMAP within DMEM: 0x043B9C (at DMEM+0xD2C, ROM offset 0x043B9C)
+      Total DMEM: 0xD6C (3436 bytes, BSS + stored + DMAP)
+
+      Compile date 'Jul 27 2022 20:47:25' at DMEM+0x57C (ROM 0x0433EC)
+      Footer after DMAP: a6 00 ff 42 00 00 00 00
+
+    SUMMARY: FWSEC-FRTS (WPR2 Setup) (primary)
+      Descriptor:   0x0430BC
+      Signatures:   0x0430EC (2 x 384 bytes)
+      Code+Data:    0x0433EC
+      DMAP:         0x043B9C
+      Target:       GSP Falcon (0x110000)
+
+  ----------------------------------------------------------------------
+
+  --- Falcon Ucode Descriptor #2 at 0x053368 ---
+
+    Pre-header (8 bytes):
+      version:          1
+      type/flags:       0x0010
+      dataSize:         0x0AB4 (2740 bytes)
+      headerSize:       0x0020 (32 bytes)
+
+    Descriptor Header:
+      version:          3
+      deviceId:         0x2684 (RTX 4090)
+
+    Packed Info (at 0x053384, 16 zero bytes before):
+      signatureVersions: 1
+      ucodeId:           0x04 (4 = GSP/FWSEC)
+      engineIdMask:      0x08 (GSP)
+      signatureCount:    2
+
+    Size Fields:
+      fieldA:            4
+      codeSize (IMEM):   0x0AE0 (2784 bytes)
+      fieldB:            5
+      interfaceOffset:   0x0D2C (3372 bytes)
+
+    RSA-3K Signatures:
+      Start:    0x053398
+      Count:    2
+      Size:     2 x 384 = 768 bytes
+      End:      0x053698
+
+      Sig #0: 0x053398 - first 16: 15 c2 6b ac 6d 6d fc 10 96 a6 1a 65 bc 92 ff 67
+      Sig #1: 0x053518 - first 16: a3 1f 46 72 29 7a 46 ec 95 75 f2 09 30 cc 30 2a
+
+    Data Section (after signatures):
+      Start: 0x053698
+      First 64 bytes:
+        00053698: 4A 75 6C 20 32 37 20 32 30 32 32 00 32 30 3A 34  Jul 27 2022.20:4
+        000536A8: 37 3A 32 35 00 00 00 00 30 03 00 00 3C 03 00 00  7:25....0...<...
+        000536B8: 30 00 00 00 40 00 00 00 FF FF FF FF 92 01 00 00  0...@...........
+        000536C8: 94 01 00 00 93 01 00 00 96 01 00 00 97 01 00 00  ................
+
+    Matching DMAP at 0x053E48 (FWSEC-FRTS (WPR2 Setup))
+      Distance from data_start to DMAP: 0x7B0 (1968 bytes)
+      DMAP interfaceOffset = 0xD2C
+
+    Memory Layout:
+      IMEM (code): Encrypted, stored in region ~0x043DE8 - 0x053368 (~62 KB)
+      DMEM (data): Stored at 0x053698 - 0x053E88 (0x7F0 = 2032 bytes)
+                   BSS region: 0x57C bytes (zero-init), Total DMEM: 0xD6C bytes
+      DMAP within DMEM: 0x053E48 (at DMEM+0xD2C)
+
+      Compile date 'Jul 27 2022 20:47:25' at DMEM+0x57C (ROM 0x053698)
+      Footer after DMAP: a6 00 ff 42 00 00 00 00
+
+    SUMMARY: FWSEC-FRTS (WPR2 Setup) (redundant copy)
+      Descriptor:   0x053368
+      Signatures:   0x053398 (2 x 384 bytes)
+      Code+Data:    0x053698
+      DMAP:         0x053E48
+      Target:       GSP Falcon (0x110000)
+
+  ----------------------------------------------------------------------
+
+  --- Falcon Ucode Descriptor #3 at 0x0699B0 ---
+
+    Pre-header (8 bytes):
+      version:          1
+      type/flags:       0x0010
+      dataSize:         0x09AC (2476 bytes)
+      headerSize:       0x0020 (32 bytes)
+
+    Descriptor Header:
+      version:          3
+      deviceId:         0x2684 (RTX 4090)
+
+    Packed Info (at 0x0699C0, 4 zero bytes before):
+      signatureVersions: 1
+      ucodeId:           0x04 (4 = GSP/FWSEC)
+      engineIdMask:      0x08 (GSP)
+      signatureCount:    2
+
+    Size Fields:
+      fieldA:            4
+      codeSize (IMEM):   0x09CC (2508 bytes)
+      fieldB:            5
+      interfaceOffset:   0x0C18 (3096 bytes)
+
+    RSA-3K Signatures:
+      Start:    0x0699D4
+      Count:    2
+      Size:     2 x 384 = 768 bytes
+      End:      0x069CD4
+
+      Sig #0: 0x0699D4 - first 16: 00 00 00 00 00 00 00 00 00 00 00 00 cc 67 08 6e
+        (starts with zeros - may have padding prefix)
+      Sig #1: 0x069B54 - first 16: da 17 21 2f c7 1e e1 14 6c a1 d6 23 1a 5c d5 3c
+
+    Data Section (after signatures):
+      Start: 0x069CD4
+      First 64 bytes:
+        00069CD4: BC A2 5E 35 40 D4 F4 AC 19 C0 37 48 4A 75 6C 20  ..^5@.....7HJul 
+        00069CE4: 20 37 20 32 30 32 32 00 31 32 3A 34 37 3A 32 35   7 2022.12:47:25
+        00069CF4: 00 00 00 00 30 03 00 00 3C 03 00 00 30 00 00 00  ....0...<...0...
+        00069D04: 40 00 00 00 AC 06 00 00 02 00 00 00 01 00 00 00  @...............
+
+    Matching DMAP at 0x06A37C (FWSEC-SB (Secure Boot))
+      Distance from data_start to DMAP: 0x6A8 (1704 bytes)
+      DMAP interfaceOffset = 0xC18
+
+    Memory Layout:
+      IMEM (code): Encrypted, stored in region ~0x054000 - 0x0699B0 (~88 KB)
+      DMEM (data): Stored at 0x069CD4 - 0x06A3BC (0x6E8 = 1768 bytes)
+                   BSS region: 0x570 bytes (zero-init), Total DMEM: 0xC58 bytes
+      DMAP within DMEM: 0x06A37C (at DMEM+0xC18)
+
+      Compile date 'Jul ...' at DMEM+0x57C (ROM 0x069CE0)
+      Footer after DMAP: a6 00 ff 42 00 00 00 00
+
+    SUMMARY: FWSEC-SB (Secure Boot) (primary)
+      Descriptor:   0x0699B0
+      Signatures:   0x0699D4 (2 x 384 bytes)
+      Code+Data:    0x069CD4
+      DMAP:         0x06A37C
+      Target:       GSP Falcon (0x110000)
+
+  ----------------------------------------------------------------------
+
+  --- Falcon Ucode Descriptor #4 at 0x070104 ---
+
+    Pre-header (8 bytes):
+      version:          1
+      type/flags:       0x0010
+      dataSize:         0x09AC (2476 bytes)
+      headerSize:       0x0020 (32 bytes)
+
+    Descriptor Header:
+      version:          3
+      deviceId:         0x2684 (RTX 4090)
+
+    Packed Info (at 0x070114, 4 zero bytes before):
+      signatureVersions: 1
+      ucodeId:           0x04 (4 = GSP/FWSEC)
+      engineIdMask:      0x08 (GSP)
+      signatureCount:    2
+
+    Size Fields:
+      fieldA:            4
+      codeSize (IMEM):   0x09CC (2508 bytes)
+      fieldB:            5
+      interfaceOffset:   0x0C18 (3096 bytes)
+
+    RSA-3K Signatures:
+      Start:    0x070128
+      Count:    2
+      Size:     2 x 384 = 768 bytes
+      End:      0x070428
+
+      Sig #0: 0x070128 - first 16: 00 00 00 00 00 00 00 00 00 00 00 00 e1 d7 62 21
+        (starts with zeros - may have padding prefix)
+      Sig #1: 0x0702A8 - first 16: 34 17 e6 98 ab 0a b6 2d d0 0f e2 3c 64 c4 b9 44
+
+    Data Section (after signatures):
+      Start: 0x070428
+      First 64 bytes:
+        00070428: 26 89 56 9C A2 77 BC 7A 28 7D 8B 28 4A 75 6C 20  &.V..w.z(}.(Jul 
+        00070438: 20 37 20 32 30 32 32 00 31 32 3A 34 37 3A 32 35   7 2022.12:47:25
+        00070448: 00 00 00 00 30 03 00 00 3C 03 00 00 30 00 00 00  ....0...<...0...
+        00070458: 40 00 00 00 AC 06 00 00 02 00 00 00 01 00 00 00  @...............
+
+    Matching DMAP at 0x070AD0 (FWSEC-SB (Secure Boot))
+      Distance from data_start to DMAP: 0x6A8 (1704 bytes)
+      DMAP interfaceOffset = 0xC18
+
+    Memory Layout:
+      IMEM (code): Encrypted, stored in region ~0x06A400 - 0x070104 (~25 KB)
+      DMEM (data): Stored at 0x070428 - 0x070B10 (0x6E8 = 1768 bytes)
+                   BSS region: 0x570 bytes (zero-init), Total DMEM: 0xC58 bytes
+      DMAP within DMEM: 0x070AD0 (at DMEM+0xC18)
+
+      Compile date 'Jul ...' at DMEM+0x57C (ROM 0x070434)
+      Footer after DMAP: a6 00 ff 42 00 00 00 00
+
+    SUMMARY: FWSEC-SB (Secure Boot) (redundant copy)
+      Descriptor:   0x070104
+      Signatures:   0x070128 (2 x 384 bytes)
+      Code+Data:    0x070428
+      DMAP:         0x070AD0
+      Target:       GSP Falcon (0x110000)
+
+  ----------------------------------------------------------------------
+
+================================================================================
+SECTION 7: NV DATA STRUCTURES AND SIGNATURES
+================================================================================
+
+  NVGI (NVIDIA GPU Init) signatures: ['0x0D6C00', '0x0D8C00']
+    At 0x0D6C00:
+      000D6C00: 4E 56 47 49 97 03 24 00 D8 1F 00 00 43 10 9D 88  NVGI..$.....C...
+      000D6C10: 02 02 00 00 24 00 00 00 00 00 04 9F 31 50 00 01  ....$.......1P..
+    At 0x0D8C00:
+      000D8C00: 4E 56 47 49 0D 03 24 00 D8 1F 00 00 43 10 9D 88  NVGI..$.....C...
+      000D8C10: 02 02 00 00 24 20 00 00 00 00 04 29 31 50 00 01  ....$ .....)1P..
+
+  NPDS (NV PCI Data Structure): ['0x00F225', '0x024B60', '0x02AA20', '0x032667', '0x0EF225']
+  NPDE (NV PCI Data Extension): ['0x000190', '0x00F254', '0x00FC40', '0x024B80', '0x02AA40', '0x032733', '0x0E0190', '0x0EF254', '0x0EFC40']
+
+  Other Signatures:
+    ELF: NOT FOUND
+    HS Firmware: NOT FOUND
+    LS Firmware: NOT FOUND
+    Boot ROM: NOT FOUND
+
+================================================================================
+SECTION 8: PMU/PERF TABLE (BIT Token 0x50)
+================================================================================
+
+  PMU Token: Ver=2 Size=252 Data=0x02EC
+
+  Pointer Table (252 bytes, 63 entries):
+    +0x00: 0x0726B9 -> a6 fe f4 1b f7 7e bd 13
+    +0x04: 0x072B66 -> 10 0f d9 fd ff ff 0f b6
+    +0x08: 0x074C14 -> bc 23 00 bf 9e bf ff bf
+    +0x14: 0x07E84F -> 00 f5 3c 00 c0 f5 3c 01
+    +0x20: 0x07638D -> 90 99 04 a0 9d 90 99 04
+    +0x28: 0x07D1D9 -> 89 32 67 00 7f 9d 32 2b
+    +0x2C: 0x07DE6E -> 0a 7e be 04 00 89 d4 65
+    +0x38: 0x07288A -> dc 00 00 00 ff dd ff ff
+    +0x3C: 0x07D568 -> fc 04 00 89 e0 67 00 3f
+    +0x40: 0x07E62D -> 32 1a 7e fc 04 00 18 0c
+    +0x44: 0x072B58 -> f0 95 04 a0 f9 bf df 98
+    +0x48: 0x07E919 -> bf 0f c7 f9 78 b3 94 00
+    +0x4C: 0x07E9C2 -> b3 94 0f 2f 4e 48 01 cf
+    +0x50: 0x07E771 -> d0 f0 d3 03 fa dd 05 f8
+    +0x58: 0x07E9E4 -> 99 00 df ff ff ff 01 fd
+    +0x5C: 0x07EA1E -> dc 00 3c bf 98 3c a9 f9
+    +0x64: 0x07EBBA -> 01 00 a0 78 00 00 00 89
+    +0x68: 0x004407 -> 20 05 1f 01 00 b0 71 0b
+    +0x6C: 0x004383 -> 10 04 20 04 02 00 80 00
+    +0x70: 0x00442B -> 10 05 13 01 00 01 00 00
+    +0x74: 0x07606A -> 89 84 45 00 bf 9c d9 d4
+    +0x78: 0x0760A7 -> 9e 90 99 04 a0 9f 89 94
+    +0x7C: 0x0760E8 -> 45 00 bf 9f d9 a8 09 9a
+    +0x80: 0x07612D -> a0 0f d9 8c 09 9a 14 a0
+    +0x84: 0x076150 -> bf 9d 89 cc 45 00 bf 9c
+    +0x88: 0x0761A2 -> 89 e0 45 00 8f e4 45 00
+    +0x8C: 0x0761CB -> d4 98 00 3e a7 54 00 7e
+    +0x90: 0x07623A -> bf 99 bf ef b6 95 15 f0
+    +0x94: 0x07E9D0 -> 9f 04 f0 95 02 fa e9 00
+    +0x98: 0x080E4E -> 64 00 e7 8f 64 00 e7 8f
+    +0x9C: 0x07624F -> 33 90 00 42 d9 08 8f 11
+    +0xA0: 0x07FB28 -> 00 00 00 00 ff ff ff ff
+    +0xA4: 0x07FD40 -> 55 55 55 55 aa aa aa aa
+    +0xA8: 0x07FDD3 -> 55 aa aa aa aa 33 33 33
+    +0xAC: 0x080025 -> 4b b1 4b b1 4b b1 4b e4
+    +0xB0: 0x080214 -> d2 78 93 6c d2 78 93 6c
+    +0xB4: 0x080250 -> 40 90 00 00 40 90 00 00
+    +0xB8: 0x08007A -> 51 68 44 44 44 44 b1 b1
+    +0xBC: 0x0762CD -> 89 fc 45 00 bf 9e 89 00
+    +0xC0: 0x07621E -> d9 50 8c 11 14 bf 99 df
+    +0xD0: 0x080716 -> 00 00 00 00 00 00 00 00
+    +0xD4: 0x0762FE -> bf 9e 8f 0c 46 00 bf d9
+    +0xD8: 0x07630C -> 9f 05 a0 d9 89 16 6d 00
+    +0xDC: 0x07EBC8 -> 25 00 01 00 a0 78 00 00
+    +0xE0: 0x07EBE6 -> 00 00 2c 00 00 00 01 01
+    +0xE4: 0x07E844 -> 00 4e f0 f2 fd fe 05 fa
+    +0xE8: 0x07632D -> bf fc 8f 24 46 00 bf fb
+    +0xEC: 0x08075B -> 00 72 03 00 00 72 03 00
+    +0xF0: 0x080834 -> 05 00 00 00 05 00 00 00
+    +0xF4: 0x08084C -> 02 00 00 00 02 00 00 00
+    +0xF8: 0x080DDA -> 84 00 e7 8f 84 00 e7 8f
+
+  Total valid ROM pointers: 51
+
+================================================================================
+SECTION 9: FALCON UCODE IMAGES COMPARISON
+================================================================================
+
+  +-------+-------------------+----------+----------+----------+----------+--------+
+  | Image | Type              | Desc Off | Sig Off  | Data Off | DMAP Off | Sigs   |
+  +-------+-------------------+----------+----------+----------+----------+--------+
+  |  #1   | FWSEC-FRTS (WPR2  | 0x0430BC | 0x0430EC | 0x0433EC | 0x043B9C |  2x384 |
+  |  #2   | FWSEC-FRTS (WPR2  | 0x053368 | 0x053398 | 0x053698 | 0x053E48 |  2x384 |
+  |  #3   | FWSEC-SB (Secure  | 0x0699B0 | 0x0699D4 | 0x069CD4 | 0x06A37C |  2x384 |
+  |  #4   | FWSEC-SB (Secure  | 0x070104 | 0x070128 | 0x070428 | 0x070AD0 |  2x384 |
+  +-------+-------------------+----------+----------+----------+----------+--------+
+
+  FWSEC-FRTS pair: Images differ in 32 bytes (different signatures)
+  FWSEC-SB pair:   Images differ in 44 bytes (different signatures)
+
+================================================================================
+SECTION 10: NVDAAL DRIVER IMPLEMENTATION GUIDE
+================================================================================
+
+  FWSEC Extraction and Loading for NVDAAL (macOS kext)
+  Target: RTX 4090 (AD102) / Ada Lovelace
+
+  A. VBIOS ROM Acquisition:
+     1. Read VBIOS via ACPI _ROM method (preferred)
+        - IOACPIPlatformDevice::evaluateObject("_ROM", ...)
+     2. Alternatively, read via BAR0 PROM registers:
+        - NV_PROM base: BAR0 + 0x300000
+        - Read in 4-byte chunks, total ~1MB
+     3. IMPORTANT: Full ROM (~1MB) needed, not just PCI ROM (~150KB)
+
+  B. BIT Table Parsing:
+     1. Scan for BIT signature: FF B8 42 49 54 00 (at ~0x1B0)
+     2. Parse header: headerSize(u8) + tokenSize(u8) + tokenCount(u8)
+     3. Token table at offset headerSize (0x0C) from BIT start
+     4. Each token: id(u8) + ver(u8) + size(u16) + dataOffset(u16)
+     5. Find token ID 0x70 (FALCON_DATA) -> read u32 at dataOffset
+        Note: On AD10x, this offset (0x80DE8) points to falcon engine data,
+        NOT a standard lookup table. Use DMAP-based discovery instead.
+
+  C. FWSEC Discovery via DMAP Scanning (Ada Lovelace method):
+     1. Scan NV data region (after UEFI image) for DMAP signature 0x50414D44
+     2. For each DMAP found:
+        a. Read interfaceOffset from DMAP+0x3C
+        b. Search backwards for descriptor pre-header: 01 00 10 00 XX XX 20 00
+        c. Verify descriptor: version=3, deviceId=0x2684 at pre-header+8
+
+  D. Ada Lovelace Falcon Ucode Descriptor Format:
+     Pre-header (8 bytes):
+       +0x00: u8  version (0x01)
+       +0x01: u8  reserved (0x00)
+       +0x02: u16 type/flags (0x0010)
+       +0x04: u16 dataSize (IMEM/DMEM size related)
+       +0x06: u16 headerSize (0x0020 = 32)
+     
+     Descriptor body (starts at pre-header + 8):
+       +0x00: u16 version (3)
+       +0x02: u16 deviceId (0x2684 for RTX 4090)
+       +0x04: variable zeros (16 bytes for FWSEC-FRTS, 4 bytes for FWSEC-SB)
+     
+     Packed info (4 bytes):
+       +0x00: u8  signatureVersions (1)
+       +0x01: u8  ucodeId (0x04 = GSP/FWSEC)
+       +0x02: u8  engineIdMask (0x08 = GSP Falcon)
+       +0x03: u8  signatureCount (2)
+     
+     Size fields (16 bytes):
+       +0x00: u32 fieldA (4)
+       +0x04: u32 codeSize / IMEM size
+       +0x08: u32 fieldB (5)
+       +0x0C: u32 interfaceOffset (DMAP position in DMEM)
+     
+     Then: signatureCount x 384 bytes of RSA-3K signatures
+     Then: IMEM (code) followed by DMEM (data) with DMAP near end
+
+  E. FWSEC-FRTS Specific Values (RTX 4090, VBIOS 95.02.18.80):
+     Descriptor offset:    0x0430BC
+     IMEM code size:       0xAE0 (2784 bytes)
+     Interface offset:     0xD2C
+     Signature count:      2
+     Signatures at:        0x0430EC
+     Code+Data at:         0x0433EC
+     DMAP at:              0x043B9C
+     DMAP cmdBufOffset:    0xD40
+     DMAP version:         3
+
+  F. FWSEC-SB Specific Values (RTX 4090, VBIOS 95.02.18.80):
+     Descriptor offset:    0x0699B0
+     IMEM code size:       0x9CC (2508 bytes)
+     Interface offset:     0xC18
+     Signature count:      2
+     Signatures at:        0x0699D4
+     Code+Data at:         0x069CD4
+     DMAP at:              0x06A37C
+     DMAP cmdBufOffset:    0x26D0
+
+  G. CRITICAL: IMEM Code is Encrypted/Signed
+     The IMEM (instruction memory) for FWSEC is stored as a large encrypted
+     block (~60 KB for FWSEC-FRTS, ~88 KB for FWSEC-SB) in the NV data region
+     PRECEDING each descriptor. This code has entropy > 7.9 bits/byte, indicating
+     encryption. Direct IMEM port loading is NOT possible on Ada Lovelace because:
+
+     a. FWSEC runs in Heavy-Secure (HS) mode on the Falcon
+     b. HS mode requires authenticated code loading via ACR (Authenticated Code Region)
+     c. The IMEM code is encrypted and can only be decrypted by the GPU's internal
+        security engine (FWSEC is self-authenticating via PKC signatures)
+     d. The 2 RSA-3K signatures in the descriptor are for THIS authentication
+
+     CONSEQUENCE: NVDAAL CANNOT load FWSEC by writing to Falcon IMEM/DMEM ports.
+     Instead, the loading must go through the DMA/ACR pathway.
+
+  H. FWSEC Loading via DMA (Correct Method for Ada Lovelace):
+     1. Allocate GPU-accessible memory (system RAM mapped for DMA)
+     2. Copy the ENTIRE FWSEC image (encrypted IMEM + descriptor + sigs + DMEM)
+        into the DMA-accessible buffer
+     3. Configure FWSEC loading via Falcon DMA registers:
+        - NV_PGSP_FALCON_DMATRFBASE = base address of DMA buffer (>> 8)
+        - NV_PGSP_FALCON_DMATRFMOFFS = Falcon memory offset
+        - NV_PGSP_FALCON_DMATRFCMD = DMA transfer command (IMEM or DMEM target)
+        - NV_PGSP_FALCON_DMATRFFBOFFS = Frame buffer offset
+     4. The Falcon hardware decrypts and authenticates the code during DMA load
+     5. Patch DMEM with DMAP command buffer (FRTS parameters, WPR2 addresses)
+     6. Set boot vector: NV_PGSP_FALCON_BOOTVEC = 0x110104
+     7. Start execution: NV_PGSP_FALCON_CPUCTL = 0x110100 (START bit)
+     8. Wait for FRTS completion: read NV_PTOP_SCPM(0x001438)
+        - Upper 16 bits = 0 means success
+     9. Verify WPR2: NV_PFB_PRI_MMU_WPR2_ADDR_LO/HI (0x1FA824/0x1FA828)
+
+  I. ALTERNATIVE: Rely on VBIOS Pre-Boot FWSEC Execution
+     On many systems, the GPU VBIOS executes FWSEC-FRTS during POST (before OS boot).
+     In this case, WPR2 is ALREADY configured when the OS driver starts.
+     The driver should CHECK WPR2 registers first:
+     1. Read NV_PFB_PRI_MMU_WPR2_ADDR_LO (0x1FA824)
+     2. Read NV_PFB_PRI_MMU_WPR2_ADDR_HI (0x1FA828)
+     3. If both are non-zero, WPR2 is already configured -> skip FWSEC loading
+     4. If zero, FWSEC-FRTS must be loaded by the driver (DMA method above)
+     This is the approach used by NVIDIA's open-gpu-kernel-modules.
+
+  J. After FWSEC-FRTS (Full GSP Boot Sequence):
+     1. FWSEC-FRTS configures WPR2 (Write Protected Region 2)
+     2. Load booter_load firmware onto SEC2 Falcon (0x840000)
+        - SEC2 booter loads GSP-RM firmware into WPR2
+     3. Load booter_unload firmware (for cleanup)
+     4. Start GSP-RM via RPC protocol
+     5. Note: FWSEC-SB (Secure Boot) may also be needed for ACR setup
+
+  K. Key Registers:
+     GSP Falcon base:      0x110000
+     SEC2 Falcon base:     0x840000
+     FALCON_CPUCTL:        base + 0x100
+     FALCON_BOOTVEC:       base + 0x104
+     FALCON_HWCFG:         base + 0x108
+     FALCON_DMACTL:        base + 0x10C
+     FALCON_IMEMC(i):      base + 0x180 + i*16
+     FALCON_IMEMD(i):      base + 0x184 + i*16
+     FALCON_DMEMC(i):      base + 0x1C0 + i*16
+     FALCON_DMEMD(i):      base + 0x1C4 + i*16
+     FALCON_OS:            base + 0x080
+     NV_PROM (VBIOS):      0x300000
+     FRTS status:          0x001438
+     WPR2 LO:              0x1FA824
+     WPR2 HI:              0x1FA828
+
+================================================================================
+SECTION 11: RAW DESCRIPTOR DUMPS
+================================================================================
+
+  Ucode #1 (FWSEC-FRTS (WPR2 Setup), primary) Raw Descriptor:
+    000430BC: 01 00 10 00 B4 0A 20 00 03 00 84 26 00 00 00 00  ...... ....&....
+    000430CC: 00 00 00 00 00 00 00 00 00 00 00 00 01 04 08 02  ................
+    000430DC: 04 00 00 00 E0 0A 00 00 05 00 00 00 2C 0D 00 00  ............,...
+    000430EC: 7A 1C D4 88 B9 BC CC A9 5A 5A 1C 72 4E 82 78 7D  z.......ZZ.rN.x}
+    000430FC: 07 A5 4E 38 3F AF 75 1E C4 25 93 DA 5F F6 A5 6D  ..N8?.u..%.._..m
+    0004310C: 0C 16 D9 6F 76 23 89 E2 88 64 AE 88 6B 24 2C 0B  ...ov#...d..k$,.
+
+  Ucode #2 (FWSEC-FRTS (WPR2 Setup), redundant copy) Raw Descriptor:
+    00053368: 01 00 10 00 B4 0A 20 00 03 00 84 26 00 00 00 00  ...... ....&....
+    00053378: 00 00 00 00 00 00 00 00 00 00 00 00 01 04 08 02  ................
+    00053388: 04 00 00 00 E0 0A 00 00 05 00 00 00 2C 0D 00 00  ............,...
+    00053398: 15 C2 6B AC 6D 6D FC 10 96 A6 1A 65 BC 92 FF 67  ..k.mm.....e...g
+    000533A8: 70 24 E0 A5 5A 1E F6 A0 A8 C3 67 26 B8 66 14 7F  p$..Z.....g&.f..
+    000533B8: 17 F4 8D 94 62 56 C9 AA 52 8B FD 98 23 E9 BE 77  ....bV..R...#..w
+
+  Ucode #3 (FWSEC-SB (Secure Boot), primary) Raw Descriptor:
+    000699B0: 01 00 10 00 AC 09 20 00 03 00 84 26 00 00 00 00  ...... ....&....
+    000699C0: 01 04 08 02 04 00 00 00 CC 09 00 00 05 00 00 00  ................
+    000699D0: 18 0C 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+    000699E0: CC 67 08 6E 1E CF A4 8B B3 20 A9 DC 35 F6 01 B6  .g.n..... ..5...
+    000699F0: 46 C0 30 97 B6 B6 AE B4 C2 AA EA F5 86 53 8E E3  F.0..........S..
+    00069A00: 00 8E 5A 4C 68 7C 4F 65 57 BE 78 93 1C 15 1E 97  ..ZLh|OeW.x.....
+
+  Ucode #4 (FWSEC-SB (Secure Boot), redundant copy) Raw Descriptor:
+    00070104: 01 00 10 00 AC 09 20 00 03 00 84 26 00 00 00 00  ...... ....&....
+    00070114: 01 04 08 02 04 00 00 00 CC 09 00 00 05 00 00 00  ................
+    00070124: 18 0C 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+    00070134: E1 D7 62 21 13 4F D1 27 FC 60 0F 30 82 0B F3 E6  ..b!.O.'.`.0....
+    00070144: A7 A9 18 D7 BD B1 71 A9 28 C4 B0 5B ED C4 DB EF  ......q.(..[....
+    00070154: 17 AC 0A BF CF C5 4D A0 39 E8 C1 18 D8 E5 63 95  ......M.9.....c.

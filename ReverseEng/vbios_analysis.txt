@@ -1,0 +1,563 @@
+================================================================================
+NVIDIA RTX 4090 (AD102) VBIOS ROM Analysis
+ROM file: /home/gabriel-maia/Documentos/NVDAAL-Driver/ReverseEng/vbios_raw.rom
+ROM size: 150016 bytes (0x24A00)
+Date: 2026-03-04
+================================================================================
+
+================================================================================
+SECTION 1: PCI Expansion ROM Images
+================================================================================
+
+--- ROM Image #0 at offset 0x00000000 ---
+  ROM Header (VbiosRomHeader):
+    Signature: 0xAA55 (valid: YES)
+    PCI Data Pointer at +0x18: 0x0170 (absolute: 0x00000170)
+  Header hex dump (0x1A bytes):
+  00000000: 55 AA 7E EB 4B 37 34 30 30 E9 4C 19 77 CC 56 49   U.~.K7400.L.w.VI
+  00000010: 44 45 4F 20 0D 00 00 00 70 01                     DEO ....p.
+
+  PCIR Header at 0x00000170:
+    Signature: 0x52494350 ('PCIR', valid: YES)
+    Vendor ID:      0x10DE (NVIDIA)
+    Device ID:      0x2684 (RTX 4090)
+    VPD Offset:     0x0000
+    PCIR Length:    0x0018 (24 bytes)
+    Revision:       0
+    Class Code:     03.00.00
+    Image Length:   0x007E units * 512 = 64512 bytes (0xFC00)
+    Code Revision:  0x0001
+    Code Type:      0x00 (PCI/AT (x86 BIOS))
+    Indicator:      0x00 (last image: NO)
+    Max Runtime:    0x0000
+  PCIR hex dump (24 bytes):
+  00000170: 50 43 49 52 DE 10 84 26 00 00 18 00 00 00 00 03   PCIR...&........
+  00000180: 7E 00 01 00 00 00 00 00                           ~.......
+
+--- ROM Image #1 at offset 0x0000FC00 ---
+  ROM Header (VbiosRomHeader):
+    Signature: 0xAA55 (valid: YES)
+    PCI Data Pointer at +0x18: 0x001C (absolute: 0x0000FC1C)
+  Header hex dump (0x1A bytes):
+  0000FC00: 55 AA A7 00 F1 0E 00 00 0B 00 64 86 01 00 00 00   U.........d.....
+  0000FC10: 00 00 00 00 00 00 50 00 1C 00                     ......P...
+
+  PCIR Header at 0x0000FC1C:
+    Signature: 0x52494350 ('PCIR', valid: YES)
+    Vendor ID:      0x10DE (NVIDIA)
+    Device ID:      0x2684 (RTX 4090)
+    VPD Offset:     0x0000
+    PCIR Length:    0x001C (28 bytes)
+    Revision:       3
+    Class Code:     00.00.00
+    Image Length:   0x00A7 units * 512 = 85504 bytes (0x14E00)
+    Code Revision:  0x0000
+    Code Type:      0x03 (EFI (UEFI GOP))
+    Indicator:      0x80 (last image: YES)
+    Max Runtime:    0x0000
+  PCIR hex dump (24 bytes):
+  0000FC1C: 50 43 49 52 DE 10 84 26 00 00 1C 00 03 00 00 00   PCIR...&........
+  0000FC2C: A7 00 00 00 03 80 00 00                           ........
+
+  Total ROM images found: 2
+    Image #0: PCI/AT (x86 BIOS)    at 0x00000000, size  64512 bytes (0xFC00)
+    Image #1: EFI (UEFI GOP)       at 0x0000FC00, size  85504 bytes (0x14E00)
+
+  Total image bytes:   150016 (0x24A00)
+  ROM file size:       150016 (0x24A00)
+
+================================================================================
+SECTION 2: BIT (BIOS Information Table)
+================================================================================
+
+  BIT Header found at offset 0x000001B0
+  BitHeader (struct size: 12 bytes):
+    ID:            0xB8FF (expected: 0xB8FF, valid: YES)
+    Signature:     0x00544942 ('BIT\0')
+    Version:       0x0100
+    Header Size:   12
+    Token Size:    6
+    Token Count:   19
+    Flags:         0x44
+
+  BIT Header hex dump:
+  000001B0: FF B8 42 49 54 00 00 01 0C 06 13 44               ..BIT......D
+
+  BIT Tokens (19 entries, 6 bytes each):
+    #    ID  Ver   Size     Offset  Name
+  --- ----- ---- ------ ----------  ----                          
+    0 0x32  0x01      4 0x0000023E  BIOS Data ('2')
+    1 0x42  0x02     37 0x0000024A  Boot Displays ('B')
+    2 0x43  0x02     44 0x0000026F  Clock Ptrs ('C')
+    3 0x44  0x01      4 0x0000029B  Display ('D')
+    4 0x49  0x01     36 0x0000029F  Init Tables ('I')
+    5 0x4D  0x02     41 0x000002C3  Memory ('M')
+    6 0x4E  0x00      0 0x00000000  NOP
+    7 0x50  0x02    252 0x000002EC  PMU Table ('P')
+    8 0x53  0x02     24 0x000003E8  String Perf ('S')
+    9 0x54  0x01      2 0x00000400  TMDS ('T')
+   10 0x55  0x01      5 0x0000040A  Voltage ('U')
+   11 0x56  0x01      6 0x0000040F  VGA Modes ('V')
+   12 0x78  0x01      8 0x00000415  Extdev ('x')
+   13 0x64  0x01      2 0x0000041D  DFP ('d')
+   14 0x70  0x02      4 0x0000041F  Falcon Data ('p')
+   15 0x75  0x01     17 0x00000423  uGPU ('u')
+   16 0x69  0x02    110 0x00000434  iGPU Table ('i')
+   17 0x45  0x01      4 0x00000402  EDID Table ('E')
+   18 0x73  0x01      4 0x00000406  Special ('s')
+
+  Full BIT Token table hex dump:
+  000001BC: 32 01 04 00 3E 02 42 02 25 00 4A 02 43 02 2C 00   2...>.B.%.J.C.,.
+  000001CC: 6F 02 44 01 04 00 9B 02 49 01 24 00 9F 02 4D 02   o.D.....I.$...M.
+  000001DC: 29 00 C3 02 4E 00 00 00 00 00 50 02 FC 00 EC 02   )...N.....P.....
+  000001EC: 53 02 18 00 E8 03 54 01 02 00 00 04 55 01 05 00   S.....T.....U...
+  000001FC: 0A 04 56 01 06 00 0F 04 78 01 08 00 15 04 64 01   ..V.....x.....d.
+  0000020C: 02 00 1D 04 70 02 04 00 1F 04 75 01 11 00 23 04   ....p.....u...#.
+  0000021C: 69 02 6E 00 34 04 45 01 04 00 02 04 73 01 04 00   i.n.4.E.....s...
+  0000022C: 06 04                                             ..
+
+================================================================================
+SECTION 3: BIT Token 0x70 (Falcon Data) - Falcon Ucode Lookup Table
+================================================================================
+
+  Falcon Data Token 0x70:
+    Data Version:  2
+    Data Size:     4
+    Data Offset:   0x0000041F
+
+  Raw data at 0x0000041F:
+  0000041F: E8 0D 08 00                                       ....
+
+  ucodeTableOffset = 0x00080DE8
+
+  [!] ucodeTableOffset 0x00080DE8 is outside ROM bounds
+
+================================================================================
+SECTION 4: BIT Token 0x50 (PMU Table)
+================================================================================
+
+  PMU Table Token 0x50:
+    Data Version:  2
+    Data Size:     252 bytes
+    Data Offset:   0x000002EC
+
+  Full raw data (252 bytes):
+  000002EC: B9 26 07 00 66 2B 07 00 14 4C 07 00 00 00 00 00   .&..f+...L......
+  000002FC: 00 00 00 00 4F E8 07 00 00 00 00 00 00 00 00 00   ....O...........
+  0000030C: 8D 63 07 00 00 00 00 00 D9 D1 07 00 6E DE 07 00   .c..........n...
+  0000031C: 00 00 00 00 00 00 00 00 8A 28 07 00 68 D5 07 00   .........(..h...
+  0000032C: 2D E6 07 00 58 2B 07 00 19 E9 07 00 C2 E9 07 00   -...X+..........
+  0000033C: 71 E7 07 00 00 00 00 00 E4 E9 07 00 1E EA 07 00   q...............
+  0000034C: 00 00 00 00 BA EB 07 00 07 44 00 00 83 43 00 00   .........D...C..
+  0000035C: 2B 44 00 00 6A 60 07 00 A7 60 07 00 E8 60 07 00   +D..j`...`...`..
+  0000036C: 2D 61 07 00 50 61 07 00 A2 61 07 00 CB 61 07 00   -a..Pa...a...a..
+  0000037C: 3A 62 07 00 D0 E9 07 00 4E 0E 08 00 4F 62 07 00   :b......N...Ob..
+  0000038C: 28 FB 07 00 40 FD 07 00 D3 FD 07 00 25 00 08 00   (...@.......%...
+  0000039C: 14 02 08 00 50 02 08 00 7A 00 08 00 CD 62 07 00   ....P...z....b..
+  000003AC: 1E 62 07 00 00 00 00 00 00 00 00 00 00 00 00 00   .b..............
+  000003BC: 16 07 08 00 FE 62 07 00 0C 63 07 00 C8 EB 07 00   .....b...c......
+  000003CC: E6 EB 07 00 44 E8 07 00 2D 63 07 00 5B 07 08 00   ....D...-c..[...
+  000003DC: 34 08 08 00 4C 08 08 00 DA 0D 08 00               4...L.......
+
+  --- Interpretation A: Direct offset ---
+    First uint32: 0x000726B9
+
+  --- Interpretation B: Data IS the PMU Lookup Table ---
+    Version:     185
+    Header Size: 38
+    Entry Size:  7
+    Entry Count: 0
+    --> Does NOT look like a standard PMU table header
+
+  --- Interpretation C: Array of uint32 offsets ---
+    Number of uint32 values: 63
+
+================================================================================
+SECTION 5: DMEMMAPPER ('DMAP') Signature Search (Global)
+================================================================================
+
+  Search for 'DMAP' (ASCII):      0 found
+
+  Search for 0x50414D44 (LE u32): 0 found
+  [!] No DMAP signature found anywhere in ROM.
+  This is EXPECTED for a partial ROM dump (150KB).
+  FWSEC ucode containing DMAP is likely in the full VBIOS (>512KB),
+  or the FWSEC code region extends beyond this dump.
+
+================================================================================
+SECTION 6: NPDE Headers
+================================================================================
+
+  Found 3 NPDE signature(s):
+
+  NPDE #0 at 0x00000190:
+    Revision:        257
+    Length:          20
+    SubImage Offset: 0x007E
+    SubImage Count:  0
+    SubImage Index:  1
+    Image Length:    0x00000000 (0 bytes)
+    Last Image Ind:  0x1043
+    Valid NPDE:      Likely NO (data in code?)
+  00000190: 4E 50 44 45 01 01 14 00 7E 00 00 01 00 00 00 00   NPDE....~.......
+  000001A0: 43 10 9D 88                                       C...
+
+  NPDE #1 at 0x0000F254:
+    Revision:        1653
+    Length:          24203
+    SubImage Offset: 0x8AEC
+    SubImage Count:  118
+    SubImage Index:  238
+    Image Length:    0xCBB70F66 (3417771878 bytes)
+    Last Image Ind:  0xC166
+    Valid NPDE:      Likely NO (data in code?)
+  0000F254: 4E 50 44 45 75 06 8B 5E EC 8A 76 EE 66 0F B7 CB   NPDEu..^..v.f...
+  0000F264: 66 C1 E1 09                                       f...
+
+  NPDE #2 at 0x0000FC40:
+    Revision:        256
+    Length:          16
+    SubImage Offset: 0x00A7
+    SubImage Count:  0
+    SubImage Index:  0
+    Image Length:    0x00070009 (458761 bytes)
+    Last Image Ind:  0x4CFE
+    Valid NPDE:      Likely NO (data in code?)
+  0000FC40: 4E 50 44 45 00 01 10 00 A7 00 00 00 09 00 07 00   NPDE............
+
+================================================================================
+SECTION 7: Additional Analysis
+================================================================================
+
+  --- VBIOS Version String Search ---
+
+  --- Notable String Search ---
+    'NVIDIA': 3 occurrence(s)
+      0x000000EB: "022 NVIDIA Corp......��....��GPU Board...."
+      0x00005060: "....NVIDIA..............NVIDIA Corporation"
+      0x00005074: "....NVIDIA Corporation.................BIO"
+    'Copyright': 1 occurrence(s)
+      0x000000D3: " ...Copyright (C) 1996-2022 NVIDIA Corp......"
+    'VIDEO': 1 occurrence(s)
+      0x0000000E: "Lw�VIDEO ....p]..IBM VGA Compatible.."
+    'RTX': 2 occurrence(s)
+      0x00000068: ".�.�RTX4090 VB Ver 95.02.18.80.AS03...D"
+      0x000000AB: "RIX-RTX4090.......Version 95.02.18.80.8"
+    '4090': 2 occurrence(s)
+      0x0000006B: "�RTX4090 VB Ver 95.02.18.80.AS03...DJH.."
+      0x000000AE: "-RTX4090.......Version 95.02.18.80.87 .."
+
+================================================================================
+SECTION 8: SUMMARY
+================================================================================
+
+  ROM File:              /home/gabriel-maia/Documentos/NVDAAL-Driver/ReverseEng/vbios_raw.rom
+  ROM Size:              150016 bytes (146.5 KB)
+  Total Image Bytes:     150016 bytes (146.5 KB)
+
+  PCI Expansion ROM Images:
+    #0: PCI/AT (x86 BIOS)     Vendor=0x10DE  Device=0x2684  Size= 64512 bytes  @0x00000000  Last=NO
+    #1: EFI (UEFI GOP)        Vendor=0x10DE  Device=0x2684  Size= 85504 bytes  @0x0000FC00  Last=YES
+
+  BIT Header:            Found at 0x000001B0
+  BIT Token Count:       19
+  BIT Falcon Data 0x70:  YES (version 2)
+  BIT PMU Table 0x50:    YES (version 2, 252 bytes)
+
+  FWSEC Entry:           NOT FOUND
+
+  DMAP Signatures:       0
+  NPDE Headers:          3 (2 valid)
+
+  IMPORTANT NOTES:
+    - This is a 146 KB partial dump. Full RTX 4090 VBIOS is typically 512KB-1MB.
+    - The FWSEC ucode blob (storedSize) likely extends beyond this dump.
+    - DMAP signature is embedded within the FWSEC DMEM region.
+    - To get the full VBIOS, use nvflash or read from BAR0+0x300000 (NV_PROM_DATA).
+
+================================================================================
+SECTION 9: DEEP DIVE - PMU Table 0x50 Offset Analysis
+================================================================================
+
+  PMU Table Data (0x50) at 0x000002EC: 252 bytes = 63 uint32 offsets
+  These are ROM-relative offsets into the FULL VBIOS (which is >512KB).
+  Offsets that fall within our 150016 byte dump can be inspected.
+
+  [ 0] 0x02EC: 0x000726B9  (beyond dump)
+  [ 1] 0x02F0: 0x00072B66  (beyond dump)
+  [ 2] 0x02F4: 0x00074C14  (beyond dump)
+  [ 3] 0x02F8: 0x00000000  (NULL)
+  [ 4] 0x02FC: 0x00000000  (NULL)
+  [ 5] 0x0300: 0x0007E84F  (beyond dump)
+  [ 6] 0x0304: 0x00000000  (NULL)
+  [ 7] 0x0308: 0x00000000  (NULL)
+  [ 8] 0x030C: 0x0007638D  (beyond dump)
+  [ 9] 0x0310: 0x00000000  (NULL)
+  [10] 0x0314: 0x0007D1D9  (beyond dump)
+  [11] 0x0318: 0x0007DE6E  (beyond dump)
+  [12] 0x031C: 0x00000000  (NULL)
+  [13] 0x0320: 0x00000000  (NULL)
+  [14] 0x0324: 0x0007288A  (beyond dump)
+  [15] 0x0328: 0x0007D568  (beyond dump)
+  [16] 0x032C: 0x0007E62D  (beyond dump)
+  [17] 0x0330: 0x00072B58  (beyond dump)
+  [18] 0x0334: 0x0007E919  (beyond dump)
+  [19] 0x0338: 0x0007E9C2  (beyond dump)
+  [20] 0x033C: 0x0007E771  (beyond dump)
+  [21] 0x0340: 0x00000000  (NULL)
+  [22] 0x0344: 0x0007E9E4  (beyond dump)
+  [23] 0x0348: 0x0007EA1E  (beyond dump)
+  [24] 0x034C: 0x00000000  (NULL)
+  [25] 0x0350: 0x0007EBBA  (beyond dump)
+  [26] 0x0354: 0x00004407  -> 0x011F0520 (IN RANGE)
+  [27] 0x0358: 0x00004383  -> 0x04200410 (IN RANGE)
+  [28] 0x035C: 0x0000442B  -> 0x01130510 (IN RANGE)
+  [29] 0x0360: 0x0007606A  (beyond dump)
+  [30] 0x0364: 0x000760A7  (beyond dump)
+  [31] 0x0368: 0x000760E8  (beyond dump)
+  [32] 0x036C: 0x0007612D  (beyond dump)
+  [33] 0x0370: 0x00076150  (beyond dump)
+  [34] 0x0374: 0x000761A2  (beyond dump)
+  [35] 0x0378: 0x000761CB  (beyond dump)
+  [36] 0x037C: 0x0007623A  (beyond dump)
+  [37] 0x0380: 0x0007E9D0  (beyond dump)
+  [38] 0x0384: 0x00080E4E  (beyond dump)
+  [39] 0x0388: 0x0007624F  (beyond dump)
+  [40] 0x038C: 0x0007FB28  (beyond dump)
+  [41] 0x0390: 0x0007FD40  (beyond dump)
+  [42] 0x0394: 0x0007FDD3  (beyond dump)
+  [43] 0x0398: 0x00080025  (beyond dump)
+  [44] 0x039C: 0x00080214  (beyond dump)
+  [45] 0x03A0: 0x00080250  (beyond dump)
+  [46] 0x03A4: 0x0008007A  (beyond dump)
+  [47] 0x03A8: 0x000762CD  (beyond dump)
+  [48] 0x03AC: 0x0007621E  (beyond dump)
+  [49] 0x03B0: 0x00000000  (NULL)
+  [50] 0x03B4: 0x00000000  (NULL)
+  [51] 0x03B8: 0x00000000  (NULL)
+  [52] 0x03BC: 0x00080716  (beyond dump)
+  [53] 0x03C0: 0x000762FE  (beyond dump)
+  [54] 0x03C4: 0x0007630C  (beyond dump)
+  [55] 0x03C8: 0x0007EBC8  (beyond dump)
+  [56] 0x03CC: 0x0007EBE6  (beyond dump)
+  [57] 0x03D0: 0x0007E844  (beyond dump)
+  [58] 0x03D4: 0x0007632D  (beyond dump)
+  [59] 0x03D8: 0x0008075B  (beyond dump)
+  [60] 0x03DC: 0x00080834  (beyond dump)
+  [61] 0x03E0: 0x0008084C  (beyond dump)
+  [62] 0x03E4: 0x00080DDA  (beyond dump)
+
+  --- Inspecting 3 reachable offsets ---
+
+  PMU[26] -> 0x00004407:
+  00004407: 20 05 1F 01 00 B0 71 0B 00 02 03 05 07 FF 00 02    .....q.........
+  00004417: 04 10 FD 3F 00 00 01 FF FF 04 FF FF 00 00 00 00   ...?............
+
+  PMU[27] -> 0x00004383:
+  00004383: 10 04 20 04 02 00 80 00 60 3D 08 FF E0 93 04 00   .. .....`=......
+  00004393: 20 D6 13 00 E0 93 04 01 40 42 0F 00 FF 80 1A 06    .......@B......
+
+  PMU[28] -> 0x0000442B:
+  0000442B: 10 05 13 01 00 01 00 00 FF FF 00 00 00 00 00 00   ................
+  0000443B: 00 00 00 00 00 00 FF FF 30 08 10 01 14 01 15 0E   ........0.......
+
+================================================================================
+SECTION 10: NPDE Header Analysis
+================================================================================
+
+  NPDE #0 at 0x00000190 (PCI/AT image):
+    Context: right after PCIR header (0x170 + 0x18 = 0x188, gap 0x188..0x190)
+  00000190: 4E 50 44 45 01 01 14 00 7E 00 00 01 00 00 00 00   NPDE....~.......
+  000001A0: 43 10 9D 88                                       C...
+    subImageOffset=0x007E (matches PCIR imageLength 0x007E)
+    subImageIndex=1 (this is sub-image 1 of the PCI/AT block)
+
+  NPDE #1 at 0x0000FC40 (EFI image):
+  0000FC40: 4E 50 44 45 00 01 10 00 A7 00 00 00 09 00 07 00   NPDE............
+    subImageOffset=0x00A7 (matches PCIR imageLength 0x00A7)
+
+================================================================================
+SECTION 11: Falcon Data / ucodeTableOffset Analysis
+================================================================================
+
+  BIT Token 0x70 Falcon Data:
+    ucodeTableOffset = 0x00080DE8 (527,848 bytes = 515.5 KB into full ROM)
+    This offset is 377,832 bytes beyond our 150,016 byte dump.
+
+  Expected full VBIOS layout (based on offset analysis):
+    0x00000000 - 0x0000FBFF  Image #0: PCI/AT x86 BIOS     ( 64,512 bytes)
+    0x0000FC00 - 0x000249FF  Image #1: EFI UEFI GOP        ( 85,504 bytes)
+    0x00024A00 - 0x000?????  Image #2: FWSEC (type 0xE0)   (unknown size)
+    0x00080DE8              Falcon Ucode Lookup Table
+
+  Largest offset in PMU table: 0x00080E4E (527,950 bytes = 515.6 KB)
+  ucodeTableOffset:            0x00080DE8 (527,848 bytes)
+  Full VBIOS minimum size:     ~516 KB (likely 512KB-1MB for RTX 4090)
+
+================================================================================
+SECTION 12: VBIOS Identification
+================================================================================
+
+  VBIOS Version String: "RTX4090 VB Ver 95.02.18.80.AS03"
+
+  ROM header identification area (0x60..0x100):
+  00000060: 00 B0 00 B8 00 C0 00 AA 52 54 58 34 30 39 30 20   ........RTX4090 
+  00000070: 56 42 20 56 65 72 20 39 35 2E 30 32 2E 31 38 2E   VB Ver 95.02.18.
+  00000080: 38 30 2E 41 53 30 33 0D 0A 00 44 4A 48 0D 0A 0F   80.AS03...DJH...
+  00000090: 0A 0F 01 21 37 D8 09 01 1E 00 06 02 E0 01 00 00   ...!7...........
+  000000A0: 00 52 4F 47 2D 53 54 52 49 58 2D 52 54 58 34 30   .ROG-STRIX-RTX40
+  000000B0: 39 30 00 00 00 00 00 00 00 56 65 72 73 69 6F 6E   90.......Version
+  000000C0: 20 39 35 2E 30 32 2E 31 38 2E 38 30 2E 38 37 20    95.02.18.80.87 
+  000000D0: 0D 0A 00 43 6F 70 79 72 69 67 68 74 20 28 43 29   ...Copyright (C)
+  000000E0: 20 31 39 39 36 2D 32 30 32 32 20 4E 56 49 44 49    1996-2022 NVIDI
+  000000F0: 41 20 43 6F 72 70 2E 0D 0A 00 00 00 FF FF 00 00   A Corp..........
+
+  Extracted Information:
+    GPU:            NVIDIA RTX 4090
+    Chip:           AD102 (Ada Lovelace, Architecture 0x19)
+    Device ID:      0x2684
+    Vendor ID:      0x10DE (NVIDIA)
+    VBIOS Version:  95.02.18.80
+    OEM Code:       AS03
+    Copyright:      1996-2022 NVIDIA Corp
+
+================================================================================
+SECTION 13: BIT Token Data Dumps
+================================================================================
+
+  Token 0x32 (v1, 4 bytes @ 0x023E):
+  0000023E: 00 00 00 00                                       ....
+
+  Token 0x42 (v2, 37 bytes @ 0x024A):
+  0000024A: 80 18 02 95 87 00 00 00 00 00 A8 07 00 00 00 00   ................
+  0000025A: 00 00 00 00 02 00 5C 5C 2E 02 00 00 42 02 04 00   ......\\....B...
+  0000026A: 10 68 5A 01 00                                    .hZ..
+
+  Token 0x43 (v2, 44 bytes @ 0x026F):
+  0000026F: E0 50 00 00 00 00 00 00 6E F8 07 00 FC 01 01 00   .P......n.......
+  0000027F: 95 F4 07 00 38 05 08 00 9D F5 07 00 C4 09 01 00   ....8...........
+  0000028F: 2F F9 07 00 6D F9 07 00 82 FA 07 00               /...m.......
+
+  Token 0x44 (v1, 4 bytes @ 0x029B):
+  0000029B: FE 51 00 00                                       .Q..
+
+  Token 0x49 (v1, 36 bytes @ 0x029F):
+  0000029F: 9E 40 00 00 00 00 A2 40 00 00 0E 41 A2 40 00 00   .@.....@...A.@..
+  000002AF: 0E 41 00 00 4A 40 B6 0F 00 00 00 00 63 7B 00 00   .A..J@......c{..
+  000002BF: 00 00 00 00                                       ....
+
+  Token 0x4D (v2, 41 bytes @ 0x02C3):
+  000002C3: 0E 0E 41 FC 41 F6 EB 07 00 67 EC 07 00 EE 51 00   ..A.A....g....Q.
+  000002D3: 00 7D 82 00 00 89 82 00 00 E8 00 08 00 97 47 00   .}............G.
+  000002E3: 00 9B 48 00 00 1F 4A 00 00                        ..H...J..
+
+  Token 0x53 (v2, 24 bytes @ 0x03E8):
+  000003E8: 68 00 50 B9 00 19 D3 00 28 60 50 14 74 50 23 04   h.P.....(`P.tP#.
+  000003F8: 01 23 27 01 14 97 50 28                           .#'...P(
+
+  Token 0x54 (v1, 2 bytes @ 0x0400):
+  00000400: B2 52                                             .R
+
+  Token 0x55 (v1, 5 bytes @ 0x040A):
+  0000040A: BF 50 00 00 00                                    .P...
+
+  Token 0x56 (v1, 6 bytes @ 0x040F):
+  0000040F: 2B 47 95 45 00 00                                 +G.E..
+
+  Token 0x78 (v1, 8 bytes @ 0x0415):
+  00000415: 00 00 01 01 00 00 00 00                           ........
+
+  Token 0x64 (v1, 2 bytes @ 0x041D):
+  0000041D: 50 77                                             Pw
+
+  Token 0x70 (v2, 4 bytes @ 0x041F):
+  0000041F: E8 0D 08 00                                       ....
+
+  Token 0x75 (v1, 17 bytes @ 0x0423):
+  00000423: 00 00 00 00 00 00 00 00 00 00 00 00 00 C7 01 01   ................
+  00000433: 00                                                .
+
+  Token 0x69 (v2, 110 bytes @ 0x0434):
+  00000434: 80 18 02 95 87 00 00 8B 1F E3 01 E3 03 00 00 30   ...............0
+  00000444: 38 2F 30 38 2F 32 32 00 00 00 00 00 00 00 00 00   8/08/22.........
+  00000454: 00 00 00 24 01 10 00 00 00 80 01 00 00 00 00 00   ...$............
+    ... (62 more bytes)
+
+  Token 0x45 (v1, 4 bytes @ 0x0402):
+  00000402: 00 00 00 00                                       ....
+
+  Token 0x73 (v1, 4 bytes @ 0x0406):
+  00000406: 00 00 00 00                                       ....
+
+================================================================================
+FINAL CONCLUSIONS
+================================================================================
+
+  1. ROM STRUCTURE:
+     This 150,016 byte (146.5 KB) file contains exactly 2 PCI Expansion ROM images.
+     The total image bytes match the file size exactly -- no trailing data.
+
+     Image #0: PCI/AT x86 BIOS  (code type 0x00)
+       - Offset: 0x00000000, Size: 64,512 bytes (0xFC00)
+       - PCIR: Vendor=0x10DE (NVIDIA), Device=0x2684 (RTX 4090)
+       - Class Code: 03.00.00 (VGA-compatible display controller)
+       - Contains BIT header at 0x1B0 with 19 tokens
+       - NPDE at 0x190
+       - VBIOS version: 95.02.18.80, OEM: AS03
+
+     Image #1: EFI UEFI GOP driver  (code type 0x03)
+       - Offset: 0x0000FC00, Size: 85,504 bytes (0x14E00)
+       - PCIR revision 3 (PCI 3.0 format)
+       - Indicator: 0x80 (last image flag set)
+       - NPDE at 0xFC40
+
+     Image #2: FWSEC (code type 0xE0) - NOT PRESENT in this dump
+       - Expected to start at 0x00024A00 (immediately after EFI image)
+       - Contains Falcon ucode (FWSEC firmware for WPR2/FRTS setup)
+       - The full VBIOS is at least 516 KB based on BIT offset analysis
+
+  2. BIT (BIOS Information Table):
+     - Location: 0x000001B0 (within PCI/AT image)
+     - ID: 0xB8FF, Signature: 'BIT\0' (0x00544942)
+     - Version: 0x0100, Header: 12 bytes, 19 tokens of 6 bytes each
+     - All 19 tokens parsed successfully
+
+  3. BIT Token 0x70 (Falcon Data):
+     - Data: 4 bytes at 0x041F -> ucodeTableOffset = 0x00080DE8
+     - This points 515.5 KB into the full ROM, inside the FWSEC image (Image #2)
+     - The Falcon Ucode Lookup Table at that offset would contain:
+       * PmuLookupTableHeader (version, headerSize, entrySize, entryCount)
+       * PmuLookupEntryAda entries (6 bytes each: u16 appId + u32 dataOffset)
+       * Entry with AppID 0x0085 -> FWSEC production firmware
+       * That entry's dataOffset -> FalconUcodeDescV3Nvidia (44 bytes)
+     - CANNOT be parsed from this partial dump
+
+  4. BIT Token 0x50 (PMU Table):
+     - Data: 252 bytes at 0x02EC (63 uint32 offsets)
+     - 60 offsets point beyond this dump (range: 0x70000-0x80000)
+     - 3 offsets point within the dump (indices 26-28, range 0x4383-0x442B)
+       * These contain clock/power configuration tables
+     - 12 offsets are NULL (unused entries)
+
+  5. DMEMMAPPER ('DMAP'):
+     - NOT found in this partial dump (expected: not present)
+     - DMAP signature (0x50414D44) resides in the FWSEC ucode's DMEM region
+     - Accessible via FalconUcodeDescV3Nvidia.interfaceOffset in the full ROM
+     - Must be patched with command 0x15 (FRTS) or 0x19 (SB) before FWSEC execution
+
+  6. NPDE Headers:
+     - 3 'NPDE' byte sequences found; 2 are real headers:
+       * 0x0190: PCI/AT image NPDE (subImageOffset=0x7E, length=20)
+       * 0xFC40: EFI image NPDE (subImageOffset=0xA7, length=16)
+       * 0xF254: False positive (x86 code matching 'NPDE' ASCII)
+
+  7. REQUIRED NEXT STEPS:
+     To complete FWSEC extraction and analysis:
+     a) Obtain full VBIOS dump (512KB-1MB) via:
+        - nvflash --save vbios_full.rom
+        - Read BAR0 + NV_PROM_DATA(offset) for offset 0..NV_VBIOS_MAX_SIZE
+        - gpu-sniffer / GPU-Z VBIOS save feature
+     b) Parse Falcon Ucode Lookup Table at 0x00080DE8
+     c) Find FWSEC AppID 0x85 entry -> FalconUcodeDescV3Nvidia
+     d) Extract IMEM + DMEM regions
+     e) Locate DMEMMAPPER and patch initCmd for FRTS/SB execution

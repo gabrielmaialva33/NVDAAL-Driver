@@ -1,0 +1,512 @@
+================================================================================
+NVIDIA GSP FIRMWARE ANALYSIS REPORT
+RTX 4090 (AD102) - Driver Version 570.144
+Generated for NVDAAL macOS Kext Development
+================================================================================
+
+Date: 2026-03-04
+Analyst: NVDAAL Firmware Analysis Tool
+Target: macOS Tahoe 26+ via OpenCore 1.0.7+
+
+
+TABLE OF CONTENTS
+----------------------------------------
+1. File Inventory & Identification
+2. Main GSP Firmware (gsp-570.144.bin)
+3. Falcon Firmware Files (booters, bootloader, scrubber)
+4. Cross-Reference with NVDAAL Driver Requirements
+5. Key Findings & Implementation Recommendations
+
+
+================================================================================
+1. FILE INVENTORY & IDENTIFICATION
+================================================================================
+
+File                                 Size Type                 Magic           
+----------------------------------------------------------------------------
+gsp-570.144.bin                63,571,696 ELF64 (RISC-V)       7F 45 4C 46     
+booter_load-570.144.bin            57,720 Falcon HS Binary     DE 10 (NVIDIA)  
+booter_unload-570.144.bin          41,592 Falcon HS Binary     DE 10 (NVIDIA)  
+bootloader-570.144.bin             36,972 Falcon Binary        DE 10 (NVIDIA)  
+scrubber-570.144.bin                8,312 Falcon HS Binary     DE 10 (NVIDIA)  
+
+Total firmware size: ~60.8 MB
+All files carry NVIDIA vendor ID 0x10DE
+
+
+================================================================================
+2. MAIN GSP FIRMWARE (gsp-570.144.bin)
+================================================================================
+
+2.1 OUTER ELF CONTAINER
+----------------------------------------
+
+  Format:           ELF64 (64-bit)
+  Endianness:       Little Endian
+  Machine:          EM_RISCV (0xF3) -- RISC-V confirmed
+  Type:             ET_REL (relocatable)
+  Entry Point:      0x0000000000000000 (none - relocatable)
+  Program Headers:  0 (none)
+  Section Headers:  14
+  Build ID:         1e5654b51660fd9c462133e46381af2183dd4371 (GNU)
+  Version String:   '570.144'
+
+  Build Path (from symbols):
+    dvs/p4/build/sw/rel/gpu_drv/r570/r570_00/drivers/resman/build/gsp/
+    out/Linux/amd64/release/LibOS/riscv64/release/firmware/ga10x/
+
+  RM Version:       'Private r570_00 r570_00-250410 unknown'
+  LibOS Version:    libos-v3.1.0
+
+2.2 SECTION TABLE
+----------------------------------------
+
+  #   Name                           Type         Offset         Size           Flags
+  --------------------------------------------------------------------------------
+  0   (null)                         NULL         0x00000000    0x00000000    
+  1   .fwimage                       PROGBITS     0x00000040    0x03C99000    WA
+  2   .note.gnu.build-id             NOTE         0x03C99040    0x00000024    
+  3   .fwversion                     PROGBITS     0x03C99064    0x00000008    
+  4   .fwsignature_gb20x             PROGBITS     0x03C9906C    0x00001000    
+  5   .fwsignature_cc_gb10x          PROGBITS     0x03C9A06C    0x00001000    
+  6   .fwsignature_gb10x             PROGBITS     0x03C9B06C    0x00001000    
+  7   .fwsignature_cc_gh100          PROGBITS     0x03C9C06C    0x00001000    
+  8   .fwsignature_gh100             PROGBITS     0x03C9D06C    0x00001000    
+  9   .fwsignature_ad10x             PROGBITS     0x03C9E06C    0x00001000    
+  10  .fwsignature_ga10x             PROGBITS     0x03C9F06C    0x00001000    
+  11  .symtab                        SYMTAB       0x03CA0070    0x00000060    
+  12  .strtab                        STRTAB       0x03CA00D0    0x000001D2    
+  13  .shstrtab                      STRTAB       0x03CA02A2    0x000000CD    
+
+  KEY SECTIONS FOR NVDAAL:
+    .fwimage:              63,541,248 bytes (60.60 MB) -- the actual RISC-V firmware
+    .fwsignature_ad10x:   4,096 bytes -- AD102 (RTX 4090) crypto signature
+    .fwsignature_ga10x:   4,096 bytes -- GA10x fallback signature
+
+2.3 FIRMWARE IMAGE (.fwimage) ANALYSIS
+----------------------------------------
+
+  Content:          Raw RISC-V machine code (NOT a nested ELF)
+  Size:             63,541,248 bytes (0x3C99000)
+  First instruction: 0x00064297 (AUIPC t0, ...)
+  Boot vector:      Starts at offset 0x0 with RISC-V boot stub
+
+  Embedded Strings Found:
+    - LibOS v3.1.0 (partitioned real-time OS)
+    - 'Copying WPR' (WPR initialization)
+    - 'ROOT: Initializing Thunk'
+    - NV2080_CTRL_* RM control codes
+    - FWSECLIC error codes (FRTS, DMA, certificate)
+    - Engine names: GSP, GSPLITE[0-7], CE, NVDEC, NVENC, OFA, NVJPG, GR[1-6]
+    - 'GSP vGPU host' (vGPU support)
+
+2.4 FIRMWARE SIGNATURES
+----------------------------------------
+
+  7 signature sections, one per supported GPU family:
+
+  Section                        GPU Family            Status
+  -----------------------------------------------------------------
+  .fwsignature_gb20x            Blackwell GB20x       N/A
+  .fwsignature_cc_gb10x         CC Blackwell GB10x    N/A
+  .fwsignature_gb10x            Blackwell GB10x       N/A
+  .fwsignature_cc_gh100         CC Hopper GH100       N/A
+  .fwsignature_gh100            Hopper GH100          N/A
+  .fwsignature_ad10x            Ada Lovelace AD10x    *** REQUIRED ***
+  .fwsignature_ga10x            Ampere GA10x          Fallback
+
+  .fwsignature_ad10x header:
+    version:          1
+    signatureType:    2 (HMAC + PKC)
+    signatureSize:    0x8C8 (2,248 bytes)
+    numEntries:       12
+    Total size:       4,096 bytes (0x1000)
+
+  DRIVER NOTE: The kext must extract .fwsignature_ad10x from the ELF
+  based on chip family detection from NV_PMC_BOOT_0 register.
+
+
+================================================================================
+3. FALCON FIRMWARE FILES
+================================================================================
+
+  All Falcon binaries share the BINDATA_STORAGE_HEADER format:
+    struct BINDATA_STORAGE_HEADER {
+      u16 vendorId;       // 0x10DE = NVIDIA
+      u16 version;        // 0
+      u32 numEntries;     // 1 (always)
+      struct {
+        u32 descOffset;   // where descriptor goes in GPU memory
+        u32 descSize;     // descriptor size (always 24)
+        u32 dataOffset;   // ucode data offset in file
+        u32 dataSize;     // ucode data size
+      } entries[1];
+    };
+
+  NOTE: descOffset points BEYOND file end -- it indicates where the
+  descriptor should be placed in GPU memory, not in the file.
+  The descriptor is at: descOffset - dataOffset - dataSize relative bytes
+  from the end of the data region.
+
+3.1 BOOTER LOAD (booter_load-570.144.bin)
+----------------------------------------
+
+  Purpose:      SEC2 Falcon ucode to LOAD the GSP bootloader into WPR
+  File size:    57,720 bytes (0xE178)
+  Runs on:      SEC2 Falcon (base register 0x840000)
+  Mode:         Heavy Secure (HS)
+
+  BINDATA_STORAGE_HEADER:
+    vendorId:     0x10DE
+    descOffset:   0x0000E200 (in GPU memory)
+    descSize:     0x18 (24 bytes)
+    dataOffset:   0x00000378
+    dataSize:     0x0000DE00 (56,832 bytes)
+
+  HS_BIN metadata (0x18..0x378, 864 bytes):
+    [0x18] signedHeaderOff:  0x3C
+    [0x1C] signedHeaderSize: 0x300 (768 bytes)
+    [0x20] patchLocOff:      0x33C
+    [0x24] patchMetaOff:     0x340
+    [0x28] hashArrayOff:     0x344
+    [0x2C] numHashEntries:   12
+    [0x30] sigProdOff:       0x350
+    [0x34] sigDbgOff:        0x354
+    [0x38] descVersion:      0x24 (36)
+    [0x3C..0x33C]            768-byte crypto signature (entropy 7.76)
+
+  Data region (0x378..0xE178):
+    First 256 bytes: zero padding (DMEM pre-fill)
+    Code region: 0x100..0x7E00 (IMEM, ~31.5 KB)
+    Zero gap: 0x7E00..0xDB30 (23.8 KB, DMEM unused space)
+    Data tail: 0xDB30..0xDE00 (DMEM initialized data)
+    Patch location: 0x7E10 (DMEM patching target)
+
+  Entropy: 5.53 bits/byte (code + significant zero padding)
+
+3.2 BOOTER UNLOAD (booter_unload-570.144.bin)
+----------------------------------------
+
+  Purpose:      SEC2 Falcon ucode to UNLOAD/teardown GSP
+  File size:    41,592 bytes (0xA278)
+  Runs on:      SEC2 Falcon (base register 0x840000)
+  Mode:         Heavy Secure (HS)
+
+  BINDATA_STORAGE_HEADER:
+    vendorId:     0x10DE
+    descOffset:   0x0000A300
+    descSize:     0x18
+    dataOffset:   0x00000378
+    dataSize:     0x00009F00 (40,704 bytes)
+
+  HS_BIN metadata: Same structure as booter_load
+    Patch location: 0x5010
+    Code region: 0x100..0x5000 (~19.8 KB)
+    Zero gap: 0x5000..0x9C30 (19.5 KB)
+  Entropy: 5.05 bits/byte
+
+3.3 GSP BOOTLOADER (bootloader-570.144.bin)
+----------------------------------------
+
+  Purpose:      Falcon bootloader that initializes GSP RISC-V core
+  File size:    36,972 bytes (0x906C)
+  Runs on:      GSP Falcon (base register 0x110000)
+  Mode:         Non-HS (loaded by booter into WPR)
+
+  BINDATA_STORAGE_HEADER:
+    vendorId:     0x10DE
+    descOffset:   0x00009100
+    descSize:     0x18
+    dataOffset:   0x0000006C
+    dataSize:     0x00009000 (36,864 bytes)
+
+  Falcon Ucode Descriptor (0x18..0x6C):
+    numApps:       5
+    IMEM base:     0x8000
+    IMEM size:     0x880 (2,176 bytes)
+    DMEM base:     0x8880
+    DMEM size:     0x10 (16 bytes)
+    Entry point:   0x0 (start of IMEM)
+
+  Memory Layout within data region:
+    0x0000..0x7100  Overlay/App code (28.4 KB)
+    0x7100..0x8000  Zero padding (3.8 KB)
+    0x8000..0x8880  IMEM - main bootloader code (2.2 KB)
+    0x8880..0x8890  DMEM - initialized data (16 bytes)
+    0x8890..0x9000  Zero padding / DMEM BSS
+
+  App Table (5 entries):
+    App[0]: empty (entry point?)
+    App[1]: codeOff=0x800 codeSz=0x800 dataOff=0x4000 dataSz=0x4800
+    App[2]: codeOff=0x2900 codeSz=0x1 (marker)
+    App[3]: marker (0x9000 = total data size)
+    App[4]: invalid/padding
+
+  Entropy: 7.19 bits/byte (mostly encrypted/signed code)
+
+3.4 MEMORY SCRUBBER (scrubber-570.144.bin)
+----------------------------------------
+
+  Purpose:      Scrubs/clears GPU memory regions before use
+  File size:    8,312 bytes (0x2078)
+  Mode:         Heavy Secure (HS)
+
+  BINDATA_STORAGE_HEADER:
+    vendorId:     0x10DE
+    descOffset:   0x00002100
+    descSize:     0x18
+    dataOffset:   0x00000378
+    dataSize:     0x00001D00 (7,424 bytes)
+
+  HS_BIN metadata: Same structure as booters
+    Patch location: 0x1A00
+    Code region: 0x100..0x1A00 (~6.4 KB)
+    Zero gap: 0x1A00..0x1D00 (768 bytes)
+  Entropy: 7.45 bits/byte (mostly encrypted/signed)
+
+
+================================================================================
+4. CROSS-REFERENCE WITH NVDAAL DRIVER REQUIREMENTS
+================================================================================
+
+4.1 GSP HEAP SIZE
+----------------------------------------
+  Expected: 129 MB (0x8100000)
+  Status: CONFIRMED - found 8 occurrences in .fwimage
+  Locations: 0xC57B7E, 0xCABD5E, 0xD2506A, 0xEA8CFF,
+             0xEA962F, 0x101089E, 0x103FD46, 0x3C9684E
+  The driver should allocate 0x8100000 bytes for GSP heap.
+
+4.2 RPC PROTOCOL
+----------------------------------------
+  Signature: 0x43505256 ('VRPC') -- CONFIRMED at fwimage+0xE8867C
+  Version: 3 (per protocol spec, embedded as constant)
+
+  RPC header structure (from nvidia-open):
+    u32 signature;    // 0x43505256
+    u32 length;       // total message length
+    u32 function;     // function ID
+    u32 handle;       // RM object handle
+    u32 status;       // return status
+
+  Confirmed RPC function IDs present in firmware:
+    0x15  NV_VGPU_MSG_FUNCTION_SYSTEM_INFO
+    0x16  NV_VGPU_MSG_FUNCTION_SET_REGISTRY
+    0x17  NV_VGPU_MSG_FUNCTION_GET_REGISTRY
+    0x20  NV_VGPU_MSG_FUNCTION_ALLOC_MEMORY
+    0x21  NV_VGPU_MSG_FUNCTION_FREE_MEMORY
+    0x52  NV_VGPU_MSG_FUNCTION_INIT_DONE
+    0x53  NV_VGPU_MSG_FUNCTION_CLEANUP
+    0x56  NV_VGPU_MSG_FUNCTION_LOG
+
+  DEAF markers (0xDEAFxxxx): 739 found -- these are RISC-V
+  immediate load patterns, NOT dead-beef style magic numbers.
+
+4.3 WPR (WRITE PROTECTED REGION)
+----------------------------------------
+  WPR2 register references found in firmware:
+    0x1FA824 (WPR2 lo): 1 occurrence
+    0x1FA828 (WPR2 hi): 1 occurrence
+
+  WPR-related strings found:
+    'Copying WPR' - WPR memory copy during init
+    'wprShadow[i].begin/size' - WPR shadow aperture mapping
+    'wprAdvise(wprId, base, size)' - WPR region allocation
+    Multiple WPR mutex/semaphore error strings
+
+  FRTS register: 0x001438 found (2 occurrences)
+    Used for checking FWSEC-FRTS completion status
+    Upper 16 bits = error code
+
+  DRIVER NOTE: The GspFwWprMeta structure name is NOT present as
+  a string in the firmware -- it is a HOST-SIDE structure defined
+  in nvidia-open-gpu-kernel-modules. The driver must construct this
+  structure and place it in memory for the GSP to read.
+
+4.4 RADIX3 PAGE TABLES
+----------------------------------------
+  String 'radix3' NOT found in firmware.
+  String 'pageTable' NOT found in firmware.
+  'PAGE_SIZE' found at 0x7115E (LibOS message page config)
+
+  This is expected: Radix3 is a HOST-SIDE concept from nvidia-open.
+  The driver must build a 3-level radix tree page table to map the
+  GSP firmware ELF into GPU-accessible memory. The GSP hardware
+  uses this for DMA, but the firmware itself doesn't reference the
+  name -- it just expects the pages to be correctly mapped.
+
+4.5 FALCON REGISTER BASES
+----------------------------------------
+  GSP Falcon (NV_PGSP):  0x110000 -- 598 references in firmware
+  SEC2 Falcon (NV_PSEC): 0x840000 -- 81 references in firmware
+  NV_PMC_BOOT_0:         0x000200 -- 4,328 references
+  NV_PMC_BOOT_1:         0x000204 -- 17 references
+  NV_PFB base:           0x100000 -- 1,217 references
+
+4.6 FWSEC / ACR BOOT CHAIN
+----------------------------------------
+  FWSEC error strings found:
+    NV_FWSECLIC_ERR_CODE_CERT21_FRTS_DEVINIT_NOT_COMPLETED
+    NV_FWSECLIC_ERR_CODE_CERT21_FRTS_SECURE_INPUT_STRUCT_VERSION_UNEXPECTED
+    NV_FWSECLIC_ERR_CODE_CERT21_FRTS_DMA_UNEXPECTED_MEDIA_TYPE
+    NV_FWSECLIC_ERR_CODE_UDE_WAIT_FOR_COMPLETION
+    NV_FWSECLIC_ERR_FWSECLIC_DID_NOT_EXECUTE
+    ACR_BINARY_HANDOFF_FAIL
+
+  Secure boot strings:
+    'RMHulkCertSize', 'RMHulkCert' (RM certificate for secure boot)
+    'NV_FWSECLIC_ERR_CODE_FALCON_INVALID'
+    'NV_FWSECLIC_ERR_CODE_FALCON_LOADER_BUFFER_READ_UNDERFLOW'
+    'NV_FWSECLIC_ERR_CODE_MMU_WPR_UNALIGNED'
+
+4.7 ENGINE ENUMERATION
+----------------------------------------
+  Engines found in firmware strings:
+    GSP, GSPLITE[0-7]
+    CE (Copy Engine) - via CE_SHIM
+    NVDEC3, NVENC2, NVJPG[0-7], OFA
+    GR[1-6] (Graphics)
+    FSP (Firmware Security Processor)
+    VPR_SCRUBBER[1-3]
+
+
+================================================================================
+5. KEY FINDINGS & IMPLEMENTATION RECOMMENDATIONS
+================================================================================
+
+5.1 FIRMWARE LOADING PROCEDURE FOR NVDAAL
+----------------------------------------
+
+  Step 1: Parse outer ELF of gsp-570.144.bin
+    - Read ELF64 section headers
+    - Extract .fwimage (offset 0x40, size 0x3C99000)
+    - Extract .fwsignature_ad10x (offset 0x3C9E06C, size 0x1000)
+    - Extract .fwversion (offset 0x3C99064, size 0x8) -> '570.144'
+
+  Step 2: Prepare GPU memory layout
+    - Allocate GSP heap: 129 MB (0x8100000)
+    - Build Radix3 page table for .fwimage (60.6 MB)
+    - Prepare GspFwWprMeta structure with addresses
+    - Set up command/message queue pages
+
+  Step 3: Load Falcon firmware
+    a. Parse booter_load-570.144.bin BINDATA_STORAGE_HEADER
+       - Skip 0x18 bytes (storage header)
+       - Read HS metadata at [0x18..0x378]
+       - Load ucode data from [0x378..0xE178] into SEC2 Falcon IMEM/DMEM
+       - Patch DMEM at offset 0x7E10 with WPR/boot parameters
+
+    b. Parse bootloader-570.144.bin
+       - IMEM: 2,176 bytes at data offset 0x8000
+       - DMEM: 16 bytes at data offset 0x8880
+       - Load into GSP Falcon IMEM/DMEM
+
+    c. Parse scrubber-570.144.bin (same format as booter)
+       - Data region: 7,424 bytes
+       - Code at data+0x100, ~6.4 KB
+
+  Step 4: Execute boot sequence
+    a. Run FWSEC-FRTS to set up WPR2 (via VBIOS)
+    b. Run booter_load on SEC2 (loads bootloader into WPR)
+    c. Bootloader bootstraps GSP RISC-V core
+    d. GSP loads .fwimage from Radix3 pages
+    e. Send RPC 0x15 (SYSTEM_INFO)
+    f. Send RPC 0x16 (SET_REGISTRY)
+    g. Send RPC 0x52 (INIT_DONE)
+
+5.2 CRITICAL SIZES AND OFFSETS
+----------------------------------------
+
+  Firmware Sizes:
+    .fwimage:          0x03C99000 (  63,541,248 bytes, 60.60 MB)
+    .fwsig_ad10x:      0x00001000 (       4,096 bytes)
+    booter_load data:  0x0000DE00 (      56,832 bytes)
+    booter_unload data:0x00009F00 (      40,704 bytes)
+    bootloader data:   0x00009000 (      36,864 bytes)
+    scrubber data:     0x00001D00 (       7,424 bytes)
+
+  Memory Allocations:
+    GSP heap:           0x08100000 ( 135,266,304 bytes, 129 MB)
+    BAR0 MMIO:          0x01000000 (  16,777,216 bytes, 16 MB)
+    BAR1 VRAM:          0x0600000000 (25,769,803,776 bytes, 24 GB on 4090)
+
+  Key Register Offsets:
+    NV_PMC_BOOT_0:      0x000200
+    NV_PMC_BOOT_1:      0x000204
+    FRTS status:        0x001438
+    GSP Falcon base:    0x110000
+    SEC2 Falcon base:   0x840000
+    WPR2 lo:            0x1FA824
+    WPR2 hi:            0x1FA828
+
+5.3 SIGNATURE STRUCTURE (.fwsignature_ad10x)
+----------------------------------------
+
+  Header (12 bytes):
+    u16 version:          1
+    u16 signatureType:    2 (HMAC + PKC)
+    u32 signatureSize:    0x8C8 (2,248 bytes)
+    u32 numEntries:       12
+
+  The signature data follows the 12-byte header.
+  Total section: 4,096 bytes (0x1000)
+  The driver must pass this alongside .fwimage for GSP verification.
+
+5.4 FALCON HS BINARY FORMAT (booter_load, booter_unload, scrubber)
+----------------------------------------
+
+  Common layout:
+    [0x00..0x18]  BINDATA_STORAGE_HEADER (24 bytes)
+    [0x18..0x3C]  Index table (9 u32 pointers)
+    [0x3C..0x33C] Cryptographic signature (768 bytes, entropy ~7.76)
+    [0x33C]       Patch location offset (in DMEM)
+    [0x340]       Patch metadata
+    [0x344..0x374] Hash entries (12 entries)
+    [0x378..]     Ucode data (IMEM + DMEM, zero-padded)
+
+  The 'patch location' is where the driver must write runtime
+  parameters (WPR addresses, boot flags) into the Falcon's DMEM
+  before launching the ucode.
+
+  Patch offsets per file:
+    booter_load:   0x7E10 (in DMEM region)
+    booter_unload: 0x5010 (in DMEM region)
+    scrubber:      0x1A00 (in DMEM region)
+
+5.5 BOOTLOADER FORMAT (different from HS binaries)
+----------------------------------------
+
+  The bootloader uses a simpler FLCN_UCODE_DESC format:
+    [0x00..0x18]  BINDATA_STORAGE_HEADER
+    [0x18..0x6C]  Falcon Ucode Descriptor:
+      numApps:     5
+      IMEM base:   0x8000 (in data)
+      IMEM size:   0x880  (2,176 bytes)
+      DMEM base:   0x8880 (in data)
+      DMEM size:   0x10   (16 bytes)
+    [0x6C..0x906C] Ucode data (36,864 bytes)
+
+  The bootloader is NOT signed with HS signature -- it runs
+  inside WPR after being loaded by the booter.
+
+5.6 ELF PARSING REQUIREMENTS FOR KEXT
+----------------------------------------
+
+  The kext needs a minimal ELF parser to extract:
+    1. ELF64 header (64 bytes)
+    2. Section headers (e_shoff = 0x3CA0370, e_shnum = 14)
+    3. Section name string table (section 13)
+    4. Locate sections by name: .fwimage, .fwsignature_ad10x
+
+  The .fwimage is raw RISC-V code, NOT a nested ELF.
+  It starts with RISC-V boot instructions at offset 0x40 in the file.
+
+  The kext does NOT need to disassemble RISC-V instructions.
+  It only needs to:
+    - Copy .fwimage into DMA-accessible memory
+    - Build Radix3 page table pointing to that memory
+    - Pass the page table root address to GSP via WprMeta
+
+================================================================================
+END OF REPORT
+================================================================================

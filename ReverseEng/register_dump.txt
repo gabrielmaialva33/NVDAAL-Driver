@@ -1,0 +1,316 @@
+================================================================================
+NVIDIA RTX 4090 (AD102) - BAR0 MMIO Register Dump
+PCI Device: 0000:02:00.0
+Resource:   /sys/bus/pci/devices/0000:02:00.0/resource0
+Timestamp:  2026-03-04 06:06:57 -03
+================================================================================
+
+Successfully mmap'd BAR0 (16MB)
+
+────────────────────────────────────────────────────────────────────────────────
+  CHIP IDENTIFICATION
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00000000] NV_PMC_BOOT_0
+  Description: Chip ID / Architecture
+  Value: 0x192000A1 (421527713)
+    Architecture [31:24]  : 0x19 = Ada Lovelace (AD1xx)
+    Implementation [23:20]: 0x2
+    Chip ID [31:20]       : 0x192
+    Major revision [7:4]  : 10
+    Minor revision [3:0]  : 1
+    Chip                  : AD102 (RTX 4090)
+    ** CONFIRMED: Ada Lovelace architecture **
+
+  [0x00000188] NV_PMC_BOOT_42
+  Description: Extended boot info
+  Value: 0xBADF5040 (3135197248)
+    Raw extended boot info: 0xBADF5040
+    Bits [31:24]: 0xBA
+    Bits [23:16]: 0xDF
+    Bits [15:8] : 0x50
+    Bits [7:0]  : 0x40
+
+────────────────────────────────────────────────────────────────────────────────
+  PMC (Power Management Controller)
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00000200] NV_PMC_ENABLE
+  Description: Device enable mask
+  Value: 0x50000000 (1342177280)
+
+  [0x00000600] NV_PMC_DEVICE_ENABLE
+  Description: Device enable
+  Value: 0xFFFFFFFF (4294967295)
+
+  [0x00000140] NV_PMC_INTR_EN_0
+  Description: Interrupt enable
+  Value: 0xBADF5040 (3135197248)
+
+────────────────────────────────────────────────────────────────────────────────
+  PBUS (Bus Control)
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00001400] NV_PBUS_VBIOS_SCRATCH
+  Description: VBIOS scratch
+  Value: 0x00000005 (5)
+
+  [0x00001438] NV_PBUS_VBIOS_SCRATCH_FRTS_ERR
+  Description: FRTS error (upper 16 bits = error)
+  Value: 0x00000000 (0)
+    FRTS error [31:16]  : 0x0000 (SUCCESS)
+    Lower bits [15:0]   : 0x0000
+
+  [0x00001454] NV_PBUS_VBIOS_SCRATCH_FWSEC_ERR
+  Description: FWSEC error (lower 16 bits = error)
+  Value: 0xC6000000 (3321888768)
+    FWSEC error [15:0]  : 0x0000 (SUCCESS)
+    Upper bits [31:16]  : 0xC600
+
+  [0x0000184C] NV_PBUS_PCI_NV_19
+  Description: BAR0 state
+  Value: 0xBADF5040 (3135197248)
+    BAR0 active [bit 0] : NO
+    Full value          : 0xBADF5040
+
+────────────────────────────────────────────────────────────────────────────────
+  PFB (Memory Controller / WPR2)
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00100C80] NV_PFB_PRI_MMU_CTRL
+  Description: MMU control
+  Value: 0x08018001 (134316033)
+    Full value          : 0x08018001
+    Bits [3:0]          : 0x1
+    Bits [7:4]          : 0x0
+
+  [0x001FA824] NV_PFB_PRI_MMU_WPR2_ADDR_LO
+  Description: WPR2 low address
+  Value: 0x05F2A000 (99786752)
+    Enabled [bit 31] : NO
+    Address [30:0]   : 0x05F2A000 (raw)
+    Actual address   : 0x0005F2A00000 (shifted << 8)
+
+  [0x001FA828] NV_PFB_PRI_MMU_WPR2_ADDR_HI
+  Description: WPR2 high address
+  Value: 0x05FF2E00 (100609536)
+    Enabled [bit 31] : NO
+    Address [30:0]   : 0x05FF2E00 (raw)
+    Actual address   : 0x0005FF2E0000 (shifted << 8)
+
+────────────────────────────────────────────────────────────────────────────────
+  GSP FALCON
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00110040] NV_PGSP_FALCON_MAILBOX0
+  Description: GSP Falcon Mailbox 0
+  Value: 0x00000000 (0)
+
+  [0x00110044] NV_PGSP_FALCON_MAILBOX1
+  Description: GSP Falcon Mailbox 1
+  Value: 0x00000000 (0)
+
+  [0x00110100] NV_PGSP_FALCON_CPUCTL
+  Description: GSP Falcon CPUCTL (bit4=halted)
+  Value: 0xBADF5720 (3135199008)
+    Halted [bit 4]  : NO
+    Started [bit 1] : NO
+
+  [0x0011004C] NV_PGSP_FALCON_IDLESTATE
+  Description: GSP Falcon idle state
+  Value: 0x00100022 (1048610)
+    Idle [bit 0]        : NO (busy)
+    Full value          : 0x00100022
+
+  [0x00110108] NV_PGSP_FALCON_HWCFG
+  Description: GSP Falcon HWCFG
+  Value: 0x80420100 (2151809280)
+
+────────────────────────────────────────────────────────────────────────────────
+  GSP RISC-V
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00118388] NV_PRISCV_RISCV_CPUCTL
+  Description: GSP RISC-V CPUCTL (bit4=halted, bit7=active)
+  Value: 0x00040B8F (265103)
+    Halted [bit 4]  : NO
+    Started [bit 1] : YES
+    Active [bit 7]  : YES
+
+  [0x00118668] NV_PRISCV_RISCV_BCR_CTRL
+  Description: GSP RISC-V BCR_CTRL (bit0=valid)
+  Value: 0xBADF5040 (3135197248)
+    Valid [bit 0]       : NO
+    Core select [bit 4] : Falcon
+
+  [0x00118400] NV_PRISCV_RISCV_BR_RETCODE
+  Description: GSP RISC-V boot return code
+  Value: 0xBADF5040 (3135197248)
+    Return code [7:0]   : 0x40
+    Status [15:8]       : 0x50
+    Full value          : 0xBADF5040
+
+  [0x00118544] NV_PRISCV_RISCV_CORE_HALT
+  Description: GSP RISC-V core halt
+  Value: 0xBADF5040 (3135197248)
+
+  [0x00118F58] NV_PGC6_BSI_SECURE_SCRATCH_14
+  Description: GSP boot stage scratch
+  Value: 0x18999825 (412719141)
+    Boot stage value    : 0x18999825
+    ** Boot stage: 412719141 **
+
+────────────────────────────────────────────────────────────────────────────────
+  SEC2 FALCON
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00840040] NV_PSEC_FALCON_MAILBOX0
+  Description: SEC2 Falcon Mailbox 0
+  Value: 0x00000000 (0)
+
+  [0x00840044] NV_PSEC_FALCON_MAILBOX1
+  Description: SEC2 Falcon Mailbox 1
+  Value: 0x00000000 (0)
+
+  [0x00840100] NV_PSEC_FALCON_CPUCTL
+  Description: SEC2 Falcon CPUCTL
+  Value: 0x00000020 (32)
+    Halted [bit 4]  : NO
+    Started [bit 1] : NO
+
+────────────────────────────────────────────────────────────────────────────────
+  SEC2 RISC-V
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00841388] NV_PSEC_RISCV_CPUCTL
+  Description: SEC2 RISC-V CPUCTL
+  Value: 0x00000010 (16)
+    Halted [bit 4]  : YES
+    Started [bit 1] : NO
+    Active [bit 7]  : NO
+
+  [0x00841400] NV_PSEC_RISCV_BR_RETCODE
+  Description: SEC2 RISC-V boot return code
+  Value: 0x0000FF00 (65280)
+    Return code [7:0]   : 0x00
+    Status [15:8]       : 0xFF
+    Full value          : 0x0000FF00
+
+  [0x00841668] NV_PSEC_RISCV_BCR_CTRL
+  Description: SEC2 RISC-V BCR_CTRL
+  Value: 0x00000001 (1)
+    Valid [bit 0]       : YES
+    Core select [bit 4] : Falcon
+
+────────────────────────────────────────────────────────────────────────────────
+  TIMER
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00009400] NV_PTIMER_TIME_0
+  Description: Timer low 32 bits
+  Value: 0x9E21D160 (2653016416)
+
+  [0x00009410] NV_PTIMER_TIME_1
+  Description: Timer high 32 bits
+  Value: 0x18999825 (412719141)
+
+────────────────────────────────────────────────────────────────────────────────
+  COMPUTE ENGINE
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00104040] NV_PCE_FALCON_MAILBOX0
+  Description: Compute Engine Falcon Mailbox 0
+  Value: 0x00200003 (2097155)
+
+────────────────────────────────────────────────────────────────────────────────
+  GSP QUEUE REGISTERS
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x00110C00] NV_PGSP_QUEUE_HEAD[0]
+  Description: GSP cmd queue head
+  Value: 0x00000000 (0)
+    Offset value        : 0x00000000 (0 bytes)
+
+  [0x00110C08] NV_PGSP_QUEUE_HEAD[1]
+  Description: GSP msg queue head
+  Value: 0x00000000 (0)
+    Offset value        : 0x00000000 (0 bytes)
+
+  [0x00110C80] NV_PGSP_QUEUE_TAIL[0]
+  Description: GSP cmd queue tail
+  Value: 0x00000000 (0)
+    Offset value        : 0x00000000 (0 bytes)
+
+  [0x00110C88] NV_PGSP_QUEUE_TAIL[1]
+  Description: GSP msg queue tail
+  Value: 0x00000000 (0)
+    Offset value        : 0x00000000 (0 bytes)
+
+────────────────────────────────────────────────────────────────────────────────
+  FUSE REGISTERS
+────────────────────────────────────────────────────────────────────────────────
+
+  [0x008241C0] NV_FUSE_OPT_FPF_GSP_UCODE1_VERSION
+  Description: GSP ucode1 fuse version
+  Value: 0x00000001 (1)
+
+  Combined Timer Value:
+    Full 64-bit value   : 0x189998259E21D160
+    Time (ns)           : 1772615215681229152
+    Time (seconds)      : 1772615215.681
+    Time (minutes)      : 29543586.93
+
+================================================================================
+  ANALYSIS SUMMARY
+================================================================================
+
+  GPU: Chip 0x192, Architecture: Ada Lovelace (AD1xx)
+  FRTS Status: OK (FWSEC-FRTS completed successfully)
+  FWSEC Status: OK
+  WPR2: NOT ENABLED (lo_en=0, hi_en=0)
+  GSP RISC-V: RUNNING (active, not halted)
+  SEC2 RISC-V: HALTED
+  Boot stage: 0x18999825
+
+================================================================================
+  VBIOS via PROM Space (BAR0 + 0x180000)
+================================================================================
+
+  PROM first 64 bytes (hex):
+    0000: 02 10 DF BA 02 10 DF BA 02 10 DF BA 02 10 DF BA  |................|
+    0010: 02 10 DF BA 02 10 DF BA 02 10 DF BA 02 10 DF BA  |................|
+    0020: 02 10 DF BA 02 10 DF BA 02 10 DF BA 02 10 DF BA  |................|
+    0030: 02 10 DF BA 02 10 DF BA 02 10 DF BA 02 10 DF BA  |................|
+
+  ROM signature: 0x1002 (UNEXPECTED)
+
+  Comparing with sysfs ROM dump...
+
+  Sysfs ROM first 64 bytes:
+    0000: 55 AA 7E EB 4B 37 34 30 30 E9 4C 19 77 CC 56 49  |U.~.K7400.L.w.VI|
+    0010: 44 45 4F 20 0D 00 00 00 70 01 5D 16 00 00 49 42  |DEO ....p.]...IB|
+    0020: 4D 20 56 47 41 20 43 6F 6D 70 61 74 69 62 6C 65  |M VGA Compatible|
+    0030: 01 00 00 00 00 00 77 5A 31 30 2F 31 33 2F 32 32  |......wZ10/13/22|
+
+  MISMATCH: 64 bytes differ in first 64 bytes
+  (PROM space may be gated/encrypted or read differently)
+  Sysfs ROM signature: 0xAA55 (VALID)
+
+  Sysfs ROM device: /sys/bus/pci/devices/0000:02:00.0/rom
+  Sysfs ROM (live) first 64 bytes:
+    0000: 55 AA 7E EB 4B 37 34 30 30 E9 4C 19 77 CC 56 49  |U.~.K7400.L.w.VI|
+    0010: 44 45 4F 20 0D 00 00 00 70 01 5D 16 00 00 49 42  |DEO ....p.]...IB|
+    0020: 4D 20 56 47 41 20 43 6F 6D 70 61 74 69 62 6C 65  |M VGA Compatible|
+    0030: 01 00 00 00 00 00 77 5A 31 30 2F 31 33 2F 32 32  |......wZ10/13/22|
+  Sysfs ROM (live) signature: 0xAA55 (VALID)
+  PROM vs sysfs ROM (live): 64 byte(s) differ
+
+================================================================================
+  VBIOS ROM IMAGE WALK (via PROM)
+================================================================================
+
+  No valid ROM images found in PROM space (first word: 0xBADF1002)
+
+================================================================================
+  Dump complete.
+================================================================================
