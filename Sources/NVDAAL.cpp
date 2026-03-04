@@ -648,9 +648,19 @@ bool NVDAAL::readAcpiProperties(void) {
     // ========================================================================
 
     // nvdaal-boot-mode: "linux-compat" enables Linux-like behavior
-    OSString *bootMode = OSDynamicCast(OSString, pciDevice->getProperty("nvdaal-boot-mode"));
-    if (bootMode && bootMode->isEqualTo("linux-compat")) {
-        linuxCompatMode = true;
+    // ACPI Buffer() becomes OSData in IORegistry, so check both types
+    OSData *bootModeData = OSDynamicCast(OSData, pciDevice->getProperty("nvdaal-boot-mode"));
+    if (bootModeData && bootModeData->getLength() >= 12) {
+        // Buffer("linux-compat") = 13 bytes including null terminator
+        if (memcmp(bootModeData->getBytesNoCopy(), "linux-compat", 12) == 0) {
+            linuxCompatMode = true;
+        }
+    } else {
+        // Fallback: try OSString in case OpenCore converts it
+        OSString *bootModeStr = OSDynamicCast(OSString, pciDevice->getProperty("nvdaal-boot-mode"));
+        if (bootModeStr && bootModeStr->isEqualTo("linux-compat")) {
+            linuxCompatMode = true;
+        }
     }
 
     // gsp-warm-boot: Skip full GSP init if WPR2 already set
