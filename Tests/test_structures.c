@@ -67,8 +67,8 @@ void test_nvfw_bin_hdr_size(void) {
 
 void test_dmem_mapper_header_size(void) {
     // sig(4) + ver(2) + size(2) + cmdOff(4) + cmdSize(4) +
-    // dataOff(4) + dataSize(4) + initCmd(4) + reserved(32) = 60
-    TEST_ASSERT_EQ(60, sizeof(struct DmemMapperHeader));
+    // dataOff(4) + dataSize(4) + initCmd(4) + reserved(32) + interfaceOffset(4) = 64
+    TEST_ASSERT_EQ(64, sizeof(struct DmemMapperHeader));
 }
 
 void test_fwsec_frts_cmd_size(void) {

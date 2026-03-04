@@ -378,9 +378,9 @@ struct GspMuxMethodDataElement {
 
 struct GspMuxMethodData {
     uint32_t tableLen;
-    GspMuxMethodDataElement acpiIdMuxModeTable[NV_ACPI_MAX_DISPLAYS];
-    GspMuxMethodDataElement acpiIdMuxPartTable[NV_ACPI_MAX_DISPLAYS];
-    GspMuxMethodDataElement acpiIdMuxStateTable[NV_ACPI_MAX_DISPLAYS];
+    struct GspMuxMethodDataElement acpiIdMuxModeTable[NV_ACPI_MAX_DISPLAYS];
+    struct GspMuxMethodDataElement acpiIdMuxPartTable[NV_ACPI_MAX_DISPLAYS];
+    struct GspMuxMethodDataElement acpiIdMuxStateTable[NV_ACPI_MAX_DISPLAYS];
 };
 
 struct GspCapsMethodData {
@@ -389,11 +389,11 @@ struct GspCapsMethodData {
 };
 
 struct GspAcpiMethodData {
-    uint8_t           bValid;
-    GspDodMethodData  dodMethodData;
-    GspJtMethodData   jtMethodData;
-    GspMuxMethodData  muxMethodData;
-    GspCapsMethodData capsMethodData;
+    uint8_t                  bValid;
+    struct GspDodMethodData  dodMethodData;
+    struct GspJtMethodData   jtMethodData;
+    struct GspMuxMethodData  muxMethodData;
+    struct GspCapsMethodData capsMethodData;
 };
 
 // GSP VF Info (for SR-IOV, not used on desktop)
@@ -460,11 +460,11 @@ typedef struct {
     uint8_t  upstreamAddressValid;
 
     // Chipset bus info
-    GspBusInfo       FHBBusInfo;                   // First Host Bridge
-    GspBusInfo       chipsetIDInfo;                // Chipset identification
+    struct GspBusInfo       FHBBusInfo;            // First Host Bridge
+    struct GspBusInfo       chipsetIDInfo;         // Chipset identification
 
     // ACPI data (zeroed for Hackintosh - no NVIDIA ACPI methods)
-    GspAcpiMethodData acpiMethodData;
+    struct GspAcpiMethodData acpiMethodData;
 
     // Virtualization
     uint32_t hypervisorType;                       // OS_HYPERVISOR_* enum
@@ -475,7 +475,7 @@ typedef struct {
     uint64_t sysTimerOffsetNs;                     // System timer offset
 
     // SR-IOV (not used on desktop)
-    GspVfInfo gspVFInfo;
+    struct GspVfInfo gspVFInfo;
 
     // OS/platform flags - THE KEY "MACUMBA" FIELDS
     uint8_t  bIsPrimary;                           // Primary GPU
@@ -483,7 +483,7 @@ typedef struct {
     uint8_t  isGridBuild;                          // GRID/vGPU build flag
 
     // PCIe config
-    GspPcieConfigReg pcieConfigReg;
+    struct GspPcieConfigReg pcieConfigReg;
     uint32_t gridBuildCsp;
 
     // Feature flags
