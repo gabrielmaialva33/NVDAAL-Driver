@@ -1,0 +1,47 @@
+NVDAAL Test Kernel Module
+=========================
+
+Read-only kernel module that probes NVIDIA RTX 4090 (AD102) GPU registers
+via BAR0 MMIO.  Does NOT claim the PCI device, so it is safe to load while
+the nvidia proprietary driver is active.
+
+Registers read:
+  - PMC_BOOT_0 / BOOT_42  (chip identification)
+  - GSP RISC-V CPUCTL, BCR_CTRL, mailboxes (GSP firmware state)
+  - SEC2 Falcon / RISC-V status
+  - WPR2 address range (write-protected region for GSP boot)
+  - FWSEC-FRTS / FWSEC-SB error status
+  - PTIMER (GPU timer)
+  - GSP command/message queue head/tail pointers
+
+Build
+-----
+  make
+
+Load (requires root, nvidia driver must be loaded)
+----
+  sudo insmod nvdaal_test.ko
+  # or with custom PCI address:
+  sudo insmod nvdaal_test.ko pci_addr="0000:03:00.0"
+
+View output
+-----------
+  dmesg | grep nvdaal_test
+
+Unload
+------
+  sudo rmmod nvdaal_test
+
+Clean
+-----
+  make clean
+
+Parameters
+----------
+  pci_addr  - PCI address of the GPU (default: "0000:02:00.0")
+
+Requirements
+------------
+  - Linux kernel headers for the running kernel
+  - Root privileges to load/unload
+  - NVIDIA GPU present at the specified PCI address
